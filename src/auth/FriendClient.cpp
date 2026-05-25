@@ -227,3 +227,70 @@ JoinFriendResult FriendClient::JoinFriend(const std::string& host, uint16_t port
         return {false, "", resp.substr(5)};
     return {false, "", "Friend is not currently in a game"};
 }
+
+UserProfileResult FriendClient::GetUserProfile(const std::string& host, uint16_t port,
+                                                const std::string& targetUser) {
+    SockInit();
+    NativeSock s = FC_Connect(host, port);
+    if (s == kBad) { SockCleanup();
+        UserProfileResult r{}; r.error = "Could not connect"; return r; }
+
+    if (!FC_SendLine(s, "GET_PROFILE " + targetUser)) {
+        SockClose(s); SockCleanup();
+        UserProfileResult r{}; r.error = "Send failed"; return r;
+    }
+
+    std::string first;
+    if (!FC_RecvLine(s, first) || first != "OK") {
+        SockClose(s); SockCleanup();
+        UserProfileResult r{}; r.error = first.empty() ? "No response" : first; return r;
+    }
+
+    UserProfileResult res;
+    res.ok = true;
+    // Defaults (noob colors)
+    res.skinR  = 0.976f; res.skinG  = 0.820f; res.skinB  = 0.173f;
+    res.shirtR = 0.059f; res.shirtG = 0.420f; res.shirtB = 0.690f;
+    res.pantsR = 0.110f; res.pantsG = 0.529f; res.pantsB = 0.047f;
+
+    std::string line;
+    while (FC_RecvLine(s, line) && line != "END") {
+        if (line.size() > 7 && line.compare(0, 7, "colors ") == 0) {
+            int sR,sG,sB, shrR,shrG,shrB, pR,pG,pB;
+            if (sscanf(line.c_str() + 7, "%d %d %d %d %d %d %d %d %d",
+                       &sR,&sG,&sB,&shrR,&shrG,&shrB,&pR,&pG,&pB) == 9) {
+                res.skinR  = sR   / 255.f;  res.skinG  = sG   / 255.f;  res.skinB  = sB   / 255.f;
+                res.shirtR = shrR / 255.f;  res.shirtG = shrG / 255.f;  res.shirtB = shrB / 255.f;
+                res.pantsR = pR   / 255.f;  res.pantsG = pG   / 255.f;  res.pantsB = pB   / 255.f;
+            }
+        } else if (line.size() > 8 && line.compare(0, 8, "friends ") == 0) {
+            res.friendCount = atoi(line.c_str() + 8);
+        } else if (line.size() >= 4 && line.compare(0, 4, "bio ") == 0) {
+            res.bio = line.substr(4);
+        } else if (line == "bio") {
+            res.bio.clear();
+        }
+    }
+
+    SockClose(s); SockCleanup();
+    return res;
+}
+
+FriendOpResult FriendClient::SetUserProfile(const std::string& host, uint16_t port,
+                                             const std::string& user,
+                                             const float skin[3], const float shirt[3],
+                                             const float pants[3], const std::string& bio) {
+    auto clamp8 = [](float v) -> int {
+        int i = (int)(v * 255.f + 0.5f);
+        return i < 0 ? 0 : (i > 255 ? 255 : i);
+    };
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd),
+             "SET_PROFILE %s %d %d %d %d %d %d %d %d %d %s",
+             user.c_str(),
+             clamp8(skin[0]),  clamp8(skin[1]),  clamp8(skin[2]),
+             clamp8(shirt[0]), clamp8(shirt[1]), clamp8(shirt[2]),
+             clamp8(pants[0]), clamp8(pants[1]), clamp8(pants[2]),
+             bio.c_str());
+    return FC_SimpleOp(host, port, cmd);
+}

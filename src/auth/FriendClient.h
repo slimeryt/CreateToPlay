@@ -39,6 +39,17 @@ struct JoinFriendResult {
     std::string error;
 };
 
+struct UserProfileResult {
+    bool        ok           = false;
+    // Avatar colours (0-1 float range)
+    float       skinR  = 0.976f, skinG  = 0.820f, skinB  = 0.173f;
+    float       shirtR = 0.059f, shirtG = 0.420f, shirtB = 0.690f;
+    float       pantsR = 0.110f, pantsG = 0.529f, pantsB = 0.047f;
+    int         friendCount = 0;
+    std::string bio;
+    std::string error;
+};
+
 // ── FriendClient ─────────────────────────────────────────────────────────────
 // All methods are synchronous / blocking — call from a background thread.
 // Text-line protocol over a short-lived TCP connection:
@@ -62,6 +73,12 @@ public:
                                     const std::string& user);
     FriendReqsResult GetRequests   (const std::string& host, uint16_t port,
                                     const std::string& user);
-    JoinFriendResult JoinFriend    (const std::string& host, uint16_t port,
-                                    const std::string& user, const std::string& target);
+    JoinFriendResult  JoinFriend      (const std::string& host, uint16_t port,
+                                     const std::string& user, const std::string& target);
+    UserProfileResult GetUserProfile (const std::string& host, uint16_t port,
+                                     const std::string& targetUser);
+    FriendOpResult    SetUserProfile (const std::string& host, uint16_t port,
+                                     const std::string& user,
+                                     const float skin[3], const float shirt[3],
+                                     const float pants[3], const std::string& bio);
 };

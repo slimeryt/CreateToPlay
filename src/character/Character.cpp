@@ -30,6 +30,7 @@ const std::array<Character::PartDef, 6> Character::kPartDefs = {{
 }};
 
 void Character::Init(Workspace& workspace, PhysicsWorld& physics, const glm::vec3& spawnPos) {
+    m_physics     = &physics;
     m_capsuleBody = physics.CreateCapsuleBody(0.7f, 2.8f, 1.0f, spawnPos);
 
     m_capsuleBody->setAngularFactor(btVector3(0, 0, 0));
@@ -39,7 +40,7 @@ void Character::Init(Workspace& workspace, PhysicsWorld& physics, const glm::vec
     m_capsuleBody->setCcdMotionThreshold(0.14f);
     m_capsuleBody->setCcdSweptSphereRadius(0.56f);
 
-    // Create 6 visual parts (no physics body — visual only)
+    // Create 6 visual parts + a matching kinematic hitbox for each
     for (int i = 0; i < 6; ++i) {
         auto part = std::make_unique<BasePart>();
         part->name        = "CharPart" + std::to_string(i);
@@ -47,9 +48,27 @@ void Character::Init(Workspace& workspace, PhysicsWorld& physics, const glm::vec
         part->color       = kPartDefs[i].color;
         part->reflectance = 0.05f;
         m_visualParts[i]  = workspace.AddPart(std::move(part));
+
+        // Box hitbox sized to the visual part (half-extents = size/2)
+        glm::vec3 half = kPartDefs[i].size * 0.5f;
+        btRigidBody* hb = physics.CreateBoxBody(half, 0.0f, spawnPos + kPartDefs[i].offset);
+        hb->setCollisionFlags(hb->getCollisionFlags()
+            | btCollisionObject::CF_KINEMATIC_OBJECT
+            | btCollisionObject::CF_NO_CONTACT_RESPONSE);
+        hb->setActivationState(DISABLE_DEACTIVATION);
+        m_partBodies[i] = hb;
     }
 
     SyncVisuals();
+}
+
+void Character::Shutdown() {
+    for (int i = 0; i < 6; ++i) {
+        if (m_partBodies[i] && m_physics) {
+            m_physics->RemoveBody(m_partBodies[i]);
+            m_partBodies[i] = nullptr;
+        }
+    }
 }
 
 glm::vec3 Character::GetPosition() const {
@@ -98,6 +117,17 @@ void Character::AdvanceAnimation(float dt, bool moving, float vertVel) {
     }
 }
 
+// Helper: push a world-space pos+rot into a kinematic hitbox body's motion state.
+static void SyncHitbox(btRigidBody* body, const glm::vec3& pos, const glm::quat& rot) {
+    if (!body) return;
+    btTransform t;
+    t.setIdentity();
+    t.setOrigin(btVector3(pos.x, pos.y, pos.z));
+    t.setRotation(btQuaternion(rot.x, rot.y, rot.z, rot.w));
+    body->getMotionState()->setWorldTransform(t);
+    body->setWorldTransform(t);  // also set directly for same-frame ray queries
+}
+
 void Character::SyncVisuals() {
     glm::vec3 capsulePos = GetPosition();
     glm::quat facingRot  = glm::angleAxis(m_facingYaw, glm::vec3(0, 1, 0));
@@ -108,31 +138,37 @@ void Character::SyncVisuals() {
 
     // ── Static parts: torso (0), head (1) ─────────────────────────────────────
     for (int i = 0; i < 2; ++i) {
-        m_visualParts[i]->position = capsulePos + facingRot * kPartDefs[i].offset;
+        glm::vec3 wp = capsulePos + facingRot * kPartDefs[i].offset;
+        m_visualParts[i]->position = wp;
         m_visualParts[i]->rotation = facingRot;
+        SyncHitbox(m_partBodies[i], wp, facingRot);
     }
 
     // ── Arms (2 = L, 3 = R) — pivot at shoulder ───────────────────────────────
-    // Walk: L swings +, R swings −.  Air: both go to same symmetric pose.
     static const glm::vec3 kArmPivot[2] = {{-1.12f, 0.84f, 0.f}, {1.12f, 0.84f, 0.f}};
     const float walkSwing[2] = { swing, -swing };
     for (int i = 0; i < 2; ++i) {
         float angle    = walkSwing[i] + m_armAirPose * m_jumpBlend;
         glm::quat rot  = glm::angleAxis(angle, glm::vec3(1, 0, 0));
         glm::vec3 lpos = kArmPivot[i] + rot * (kPartDefs[2 + i].offset - kArmPivot[i]);
-        m_visualParts[2 + i]->position = capsulePos + facingRot * lpos;
-        m_visualParts[2 + i]->rotation = facingRot * rot;
+        glm::vec3 wp   = capsulePos + facingRot * lpos;
+        glm::quat wr   = facingRot * rot;
+        m_visualParts[2 + i]->position = wp;
+        m_visualParts[2 + i]->rotation = wr;
+        SyncHitbox(m_partBodies[2 + i], wp, wr);
     }
 
     // ── Legs (4 = L, 5 = R) — pivot at hip ────────────────────────────────────
-    // Walk: L swings −, R swings +.  Air: both go to same symmetric pose.
     static const glm::vec3 kLegPivot[2] = {{-0.385f, -0.63f, 0.f}, {0.385f, -0.63f, 0.f}};
     const float legWalkSwing[2] = { -swing, swing };
     for (int i = 0; i < 2; ++i) {
         float angle    = legWalkSwing[i] + m_legAirPose * m_jumpBlend;
         glm::quat rot  = glm::angleAxis(angle, glm::vec3(1, 0, 0));
         glm::vec3 lpos = kLegPivot[i] + rot * (kPartDefs[4 + i].offset - kLegPivot[i]);
-        m_visualParts[4 + i]->position = capsulePos + facingRot * lpos;
-        m_visualParts[4 + i]->rotation = facingRot * rot;
+        glm::vec3 wp   = capsulePos + facingRot * lpos;
+        glm::quat wr   = facingRot * rot;
+        m_visualParts[4 + i]->position = wp;
+        m_visualParts[4 + i]->rotation = wr;
+        SyncHitbox(m_partBodies[4 + i], wp, wr);
     }
 }

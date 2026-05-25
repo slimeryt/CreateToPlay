@@ -89,12 +89,14 @@ private:
     void DrawEscapeMenu();
     void DrawHomePage();
     void DrawAuthScreen();   // login / signup card (calls server)
-    void DrawSettingsPanel(); // app-level settings overlay
+    void DrawSettingsPanel();       // app-level settings overlay
+    void DrawProfilePage();         // standalone own-profile full-screen page
+    void DrawFriendProfilePage();   // standalone friend-profile full-screen page
 
     // 3-D avatar preview (off-screen FBO rendered before ImGui flushes)
     void InitAvatarPreview();
     void ShutdownAvatarPreview();
-    void RenderAvatarPreview();   // renders to m_avatarFBO each frame on Avatar tab
+    void RenderAvatarPreview(bool headshot = false);  // renders to m_avatarFBO; headshot=true → static crop on head+shoulders
 
     ImFont* m_fontTitle        = nullptr;
 
@@ -112,6 +114,9 @@ private:
     AppSettings m_appSettings;
     bool        m_settingsOpen = false;
     int         m_settingsTab  = 0;   // 0=Account 1=Appearance 2=Privacy 3=About
+    bool        m_profileOpen       = false;
+    bool        m_friendProfileOpen = false;  // viewing a specific friend's profile
+    std::string m_viewingFriendName;          // which friend we're viewing
     void        SaveAppSettings();
     void        LoadAppSettings();
 
@@ -123,20 +128,36 @@ private:
     std::vector<FriendReqEntry> m_friendRequests;
 
     // Async futures
-    std::future<FriendListResult> m_friendListFuture;
-    std::future<FriendReqsResult> m_friendReqsFuture;
-    std::future<FriendOpResult>   m_friendOpFuture;
-    std::future<JoinFriendResult> m_joinFriendFuture;
-    bool m_friendListInFlight = false;
-    bool m_friendReqsInFlight = false;
-    bool m_friendOpInFlight   = false;
-    bool m_joinInFlight       = false;
+    std::future<FriendListResult>  m_friendListFuture;
+    std::future<FriendReqsResult>  m_friendReqsFuture;
+    std::future<FriendOpResult>    m_friendOpFuture;
+    std::future<JoinFriendResult>  m_joinFriendFuture;
+    std::future<UserProfileResult> m_friendProfileFuture;
+    bool m_friendListInFlight    = false;
+    bool m_friendReqsInFlight    = false;
+    bool m_friendOpInFlight      = false;
+    bool m_joinInFlight          = false;
+    bool m_friendProfileInFlight = false;
 
-    float m_friendRefreshT = 0.f;  // seconds until next auto-refresh
+    // Cached friend profile (for DrawFriendProfilePage)
+    std::string       m_profileViewingUser;   // username the cache is for
+    UserProfileResult m_cachedFriendProfile;
+
+    float m_friendRefreshT     = 0.f;  // seconds until next auto-refresh
+    int   m_prevFriendReqCount = 0;    // count from last poll, for toast detection
+    bool  m_toastDismissed     = false; // user dismissed the "new request" toast
 
     // Add-friend input (Friends tab)
     char        m_addFriendBuf[32] = {};
     std::string m_addFriendStatus;  // "" | "Sent!" | "Error: ..."
+
+    // Friends sub-tabs: 0=Friends, 1=Pending, 2=Blocked
+    int  m_friendsSubTab = 0;
+
+    // Blocked users (local list — persisted in profile)
+    std::vector<std::string> m_blockedUsers;
+    char        m_blockUserBuf[32] = {};
+    std::string m_blockStatus;
 
     // Per-session tracking so we don't double-send
     std::set<std::string> m_sentFriendReqs;
@@ -181,12 +202,15 @@ private:
     std::string m_displayName;
     std::string m_email;
     std::string m_phoneNumber;
+    std::string m_bio;                          // short "About me" text
     bool        m_editingDisplayName = false;
     bool        m_editingEmail       = false;
     bool        m_editingPhone       = false;
+    bool        m_editingBio         = false;
     char        m_inputDisplayName[64]  = {};
     char        m_inputEmail[128]       = {};
     char        m_inputPhone[32]        = {};
+    char        m_inputBio[160]         = {};   // 150-char visible limit + null
     void        SaveProfile();
     void        LoadProfile();
 

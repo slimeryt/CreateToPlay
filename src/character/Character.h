@@ -17,6 +17,7 @@ struct AvatarConfig {
 class Character {
 public:
     void Init(Workspace& workspace, PhysicsWorld& physics, const glm::vec3& spawnPos);
+    void Shutdown();   // removes per-part hitbox bodies from the physics world
 
     void SyncVisuals();
     void SetAvatar(const AvatarConfig& cfg);
@@ -31,10 +32,13 @@ public:
     void         SetFacingYaw(float y) { m_facingYaw = y; }
 
 private:
-    btRigidBody* m_capsuleBody = nullptr;
+    PhysicsWorld*  m_physics    = nullptr;   // non-owning, for Shutdown()
+    btRigidBody*   m_capsuleBody = nullptr;
 
     // 6 visual parts: torso, head, armL, armR, legL, legR
-    std::array<BasePart*, 6> m_visualParts = {};
+    std::array<BasePart*, 6>      m_visualParts  = {};
+    // 6 kinematic hitbox bodies (sensor — no contact response)
+    std::array<btRigidBody*, 6>   m_partBodies   = {};
 
     // local offsets and sizes (before facing rotation)
     struct PartDef { glm::vec3 offset; glm::vec3 size; glm::vec3 color; };

@@ -88,6 +88,9 @@ set(CPACK_PACKAGE_FILE_NAME   "CreateToPlay-0.1.0-win64")
 set(CPACK_GENERATOR           "ZIP")
 set(CPACK_COMPONENTS_ALL      "Game")          # only our component, not Bullet/SDL
 set(CPACK_STRIP_FILES         TRUE)            # strip debug symbols from Release exe
+# Enable per-component install so non-Game installs (Bullet cmake files) are excluded
+set(CPACK_ARCHIVE_COMPONENT_INSTALL   ON)
+set(CPACK_COMPONENTS_GROUPING         ALL_COMPONENTS_IN_ONE)
 include(CPack)
 
 # ImGuizmo target is provided by FetchContent (ImGuizmo/CMakeLists.txt)

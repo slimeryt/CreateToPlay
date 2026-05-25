@@ -79,6 +79,70 @@ static void AppendAccount(const char* name, uint32_t hash) {
     g_accounts.push_back(a);
 }
 
+// ── Profile store ─────────────────────────────────────────────────────────────
+static std::string g_profilesPath;
+
+struct ProfileEntry {
+    char    name[24]  = {};
+    uint8_t skinR  = 249, skinG  = 209, skinB  = 44;
+    uint8_t shirtR = 15,  shirtG = 107, shirtB = 176;
+    uint8_t pantsR = 28,  pantsG = 135, pantsB = 12;
+    char    bio[152]  = {};
+};
+static std::vector<ProfileEntry> g_profiles;
+
+static void LoadProfiles() {
+    g_profiles.clear();
+    FILE* f = fopen(g_profilesPath.c_str(), "r");
+    if (!f) return;
+    char line[300];
+    while (fgets(line, sizeof(line), f)) {
+        for (char* p = line; *p; ++p) if (*p=='\n'||*p=='\r'){*p=0;break;}
+        // format: username|sR|sG|sB|shrR|shrG|shrB|pR|pG|pB|bio_text
+        // find first 10 '|' separators, rest is bio
+        char* fields[11] = {};
+        int fc = 0;
+        char* p = line;
+        fields[fc++] = p;
+        for (; *p && fc < 11; ++p) {
+            if (*p == '|') { *p = '\0'; fields[fc++] = p + 1; }
+        }
+        if (fc < 10) continue;
+        ProfileEntry e{};
+        strncpy(e.name, fields[0], sizeof(e.name)-1);
+        e.skinR  = (uint8_t)atoi(fields[1]); e.skinG  = (uint8_t)atoi(fields[2]); e.skinB  = (uint8_t)atoi(fields[3]);
+        e.shirtR = (uint8_t)atoi(fields[4]); e.shirtG = (uint8_t)atoi(fields[5]); e.shirtB = (uint8_t)atoi(fields[6]);
+        e.pantsR = (uint8_t)atoi(fields[7]); e.pantsG = (uint8_t)atoi(fields[8]); e.pantsB = (uint8_t)atoi(fields[9]);
+        if (fc >= 11 && fields[10]) strncpy(e.bio, fields[10], sizeof(e.bio)-1);
+        g_profiles.push_back(e);
+    }
+    fclose(f);
+}
+static void SaveProfiles() {
+    FILE* f = fopen(g_profilesPath.c_str(), "w");
+    if (!f) return;
+    for (auto& e : g_profiles)
+        fprintf(f, "%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s\n",
+                e.name,
+                e.skinR,  e.skinG,  e.skinB,
+                e.shirtR, e.shirtG, e.shirtB,
+                e.pantsR, e.pantsG, e.pantsB,
+                e.bio);
+    fclose(f);
+}
+static ProfileEntry* FindProfile(const char* name) {
+    for (auto& e : g_profiles)
+        if (strcmp(e.name, name) == 0) return &e;
+    return nullptr;
+}
+static ProfileEntry& GetOrCreateProfile(const char* name) {
+    if (auto* e = FindProfile(name)) return *e;
+    ProfileEntry e{};
+    strncpy(e.name, name, sizeof(e.name)-1);
+    g_profiles.push_back(e);
+    return g_profiles.back();
+}
+
 // ── Friend store ──────────────────────────────────────────────────────────────
 static std::string g_friendsPath;
 static std::string g_freqsPath;
@@ -393,6 +457,75 @@ static void HandleTextCommand(int slotIdx, const std::string& line) {
             if (!found) TextSend(fd, "FAIL Friend is not in a game");
         }
     }
+    // ── SET_PROFILE username sR sG sB shrR shrG shrB pR pG pB bio ────────────────
+    else if (strcmp(cmd, "SET_PROFILE") == 0) {
+        // Parse manually: username + 9 color ints + rest-of-line as bio
+        const char* p = line.c_str();
+        while (*p && *p != ' ') ++p;  // skip "SET_PROFILE"
+        while (*p == ' ') ++p;
+
+        char uname[24] = {};
+        int i = 0;
+        while (*p && *p != ' ' && i < 23) uname[i++] = *p++;
+        while (*p == ' ') ++p;
+
+        int cols[9] = {249,209,44, 15,107,176, 28,135,12};
+        for (int ci = 0; ci < 9 && *p; ++ci) {
+            int v = 0;
+            while (*p >= '0' && *p <= '9') v = v * 10 + (*p++) - '0';
+            while (*p == ' ') ++p;
+            cols[ci] = v;
+        }
+        // rest of line = bio
+        char bio[152] = {};
+        strncpy(bio, p, sizeof(bio)-1);
+        for (int ci = 0; bio[ci]; ++ci)
+            if (bio[ci] == '\n' || bio[ci] == '\r') { bio[ci] = 0; break; }
+
+        if (!uname[0]) { TextSend(fd, "FAIL Invalid args"); }
+        else {
+            auto& e  = GetOrCreateProfile(uname);
+            e.skinR  = (uint8_t)cols[0]; e.skinG  = (uint8_t)cols[1]; e.skinB  = (uint8_t)cols[2];
+            e.shirtR = (uint8_t)cols[3]; e.shirtG = (uint8_t)cols[4]; e.shirtB = (uint8_t)cols[5];
+            e.pantsR = (uint8_t)cols[6]; e.pantsG = (uint8_t)cols[7]; e.pantsB = (uint8_t)cols[8];
+            strncpy(e.bio, bio, sizeof(e.bio)-1);
+            SaveProfiles();
+            TextSend(fd, "OK");
+            printf("[Server] Profile updated: %s\n", uname);
+        }
+    }
+    // ── GET_PROFILE username ────────────────────────────────────────────────────
+    else if (strcmp(cmd, "GET_PROFILE") == 0) {
+        if (!a1[0]) { TextSend(fd, "FAIL Invalid args"); }
+        else {
+            // Count friendships for this user
+            int fcount = 0;
+            for (auto& fp : g_friends)
+                if (strcmp(fp.a, a1) == 0 || strcmp(fp.b, a1) == 0) ++fcount;
+
+            auto* e = FindProfile(a1);
+            TextSend(fd, "OK");
+
+            char row[300];
+            if (e) {
+                snprintf(row, sizeof(row), "colors %d %d %d %d %d %d %d %d %d",
+                         e->skinR,  e->skinG,  e->skinB,
+                         e->shirtR, e->shirtG, e->shirtB,
+                         e->pantsR, e->pantsG, e->pantsB);
+            } else {
+                snprintf(row, sizeof(row), "colors 249 209 44 15 107 176 28 135 12");
+            }
+            TextSend(fd, row);
+
+            snprintf(row, sizeof(row), "friends %d", fcount);
+            TextSend(fd, row);
+
+            snprintf(row, sizeof(row), "bio %s", e ? e->bio : "");
+            TextSend(fd, row);
+
+            TextSend(fd, "END");
+        }
+    }
     else {
         TextSend(fd, "FAIL Unknown command");
     }
@@ -492,16 +625,18 @@ int main() {
     const char* dataDir = getenv("DATA_DIR");
     std::string dir     = dataDir ? dataDir : ".";
 
-    g_accountsPath = dir + "/accounts.dat";
-    g_friendsPath  = dir + "/friends.dat";
-    g_freqsPath    = dir + "/friendreqs.dat";
+    g_accountsPath  = dir + "/accounts.dat";
+    g_friendsPath   = dir + "/friends.dat";
+    g_freqsPath     = dir + "/friendreqs.dat";
+    g_profilesPath  = dir + "/profiles.dat";
 
     LoadAccounts();
     LoadFriends();
     LoadFriendReqs();
+    LoadProfiles();
 
-    printf("[Server] %d account(s), %d friendship(s), %d pending request(s)\n",
-           (int)g_accounts.size(), (int)g_friends.size(), (int)g_freqs.size());
+    printf("[Server] %d account(s), %d friendship(s), %d pending request(s), %d profile(s)\n",
+           (int)g_accounts.size(), (int)g_friends.size(), (int)g_freqs.size(), (int)g_profiles.size());
 
     const char* portEnv = getenv("PORT");
     uint16_t port = portEnv ? (uint16_t)atoi(portEnv) : NET_DEFAULT_PORT;

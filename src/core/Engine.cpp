@@ -453,6 +453,7 @@ void Engine::Render() {
 void Engine::Shutdown() {
     m_netClient.Disconnect();
     m_coreGui.Shutdown();
+    m_character.Shutdown();   // remove per-part hitbox bodies before physics shuts down
     m_physics.Shutdown();
     m_renderer.Shutdown();
     m_window.Shutdown();
