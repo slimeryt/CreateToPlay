@@ -80,6 +80,7 @@ struct Client {
     uint8_t skinR=249, skinG=209, skinB=44;
     uint8_t shirtR=15, shirtG=107, shirtB=176;
     uint8_t pantsR=28, pantsG=135, pantsB=12;
+    char    name[20]  = {};      // display name set on PKT_JOIN
     std::vector<uint8_t> buf;
 
     void SendRaw(const void* data, int len) const {
@@ -105,6 +106,7 @@ static void BroadcastSnapshot() {
         s.skinR  = c.skinR;  s.skinG  = c.skinG;  s.skinB  = c.skinB;
         s.shirtR = c.shirtR; s.shirtG = c.shirtG; s.shirtB = c.shirtB;
         s.pantsR = c.pantsR; s.pantsG = c.pantsG; s.pantsB = c.pantsB;
+        memcpy(s.name, c.name, sizeof(s.name));
     }
     int plen = 2 + snap.count * (int)sizeof(RemoteState);
     for (auto& c : g_clients)
@@ -213,6 +215,7 @@ static void ProcessPayload(int i, const uint8_t* buf, int len) {
         c.skinR  = j->skinR;  c.skinG  = j->skinG;  c.skinB  = j->skinB;
         c.shirtR = j->shirtR; c.shirtG = j->shirtG; c.shirtB = j->shirtB;
         c.pantsR = j->pantsR; c.pantsG = j->pantsG; c.pantsB = j->pantsB;
+        strncpy(c.name, j->name, sizeof(c.name) - 1);
         c.inGame = true;
         PktWelcome w{}; w.myId = c.id;
         c.SendRaw(&w, sizeof(w));

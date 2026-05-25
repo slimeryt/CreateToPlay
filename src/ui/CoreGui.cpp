@@ -73,24 +73,30 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
         }
     }
 
-    // Session — auto-login if session.dat exists from a previous run
+    // Session + avatar — load persisted data from AppData/pref directory
     {
         char* pref = SDL_GetPrefPath("CreateToPlay", "Game");
         if (pref) {
             m_sessionPath = std::string(pref) + "session.dat";
+            m_avatarPath  = std::string(pref) + "avatar.dat";
             SDL_free(pref);
+
+            // Auto-login
             if (FILE* f = fopen(m_sessionPath.c_str(), "r")) {
                 char line[32] = {};
                 if (fgets(line, sizeof(line), f) && line[0]) {
                     for (char* p = line; *p; ++p)
                         if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
                     if (line[0]) {
-                        m_username  = line;
-                        m_loggedIn  = true;
+                        m_username = line;
+                        m_loggedIn = true;
                     }
                 }
                 fclose(f);
             }
+
+            // Restore saved avatar colours
+            LoadAvatar();
         }
     }
 }
@@ -107,6 +113,27 @@ void CoreGui::ClearSession() {
     m_loggedIn  = false;
     m_username.clear();
     if (!m_sessionPath.empty()) remove(m_sessionPath.c_str());
+}
+
+void CoreGui::SaveAvatar() {
+    if (m_avatarPath.empty()) return;
+    if (FILE* f = fopen(m_avatarPath.c_str(), "w")) {
+        fprintf(f, "%f %f %f\n", m_avatarSkin[0],  m_avatarSkin[1],  m_avatarSkin[2]);
+        fprintf(f, "%f %f %f\n", m_avatarShirt[0], m_avatarShirt[1], m_avatarShirt[2]);
+        fprintf(f, "%f %f %f\n", m_avatarPants[0], m_avatarPants[1], m_avatarPants[2]);
+        fclose(f);
+    }
+}
+
+void CoreGui::LoadAvatar() {
+    if (m_avatarPath.empty()) return;
+    if (FILE* f = fopen(m_avatarPath.c_str(), "r")) {
+        fscanf(f, "%f %f %f", &m_avatarSkin[0],  &m_avatarSkin[1],  &m_avatarSkin[2]);
+        fscanf(f, "%f %f %f", &m_avatarShirt[0], &m_avatarShirt[1], &m_avatarShirt[2]);
+        fscanf(f, "%f %f %f", &m_avatarPants[0], &m_avatarPants[1], &m_avatarPants[2]);
+        fclose(f);
+        m_avatarDirty = true;  // apply to character on next FixedUpdate
+    }
 }
 
 // ── 3-D avatar preview ────────────────────────────────────────────────────────
@@ -362,6 +389,48 @@ void CoreGui::Render() {
                 m_menuOpen = false;
         }
         m_skipEscapeThisFrame = false;
+    }
+
+    // ── Nametags (drawn before HUD so HUD stays on top) ─────────────────────
+    if (!m_nametags.empty()) {
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize(io.DisplaySize);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.f, 0.f, 0.f, 0.f});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {0.f, 0.f});
+        ImGui::Begin("##nametags", nullptr,
+            ImGuiWindowFlags_NoDecoration  | ImGuiWindowFlags_NoInputs  |
+            ImGuiWindowFlags_NoNav          | ImGuiWindowFlags_NoMove    |
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings);
+
+        ImDrawList* ndl = ImGui::GetWindowDrawList();
+        const float padX = 9.f, padY = 4.f, rounding = 5.f;
+
+        for (const auto& tag : m_nametags) {
+            if (tag.name.empty()) continue;
+            ImVec2 tsz = ImGui::CalcTextSize(tag.name.c_str());
+            // Centre the tag horizontally, place it above the projected head point
+            float px = tag.x - tsz.x * 0.5f;
+            float py = tag.y - tsz.y - padY * 2.f - 4.f;
+
+            // Dark semi-transparent pill
+            ndl->AddRectFilled(
+                {px - padX,          py - padY},
+                {px + tsz.x + padX,  py + tsz.y + padY},
+                IM_COL32(10, 10, 18, 175), rounding);
+            ndl->AddRect(
+                {px - padX,          py - padY},
+                {px + tsz.x + padX,  py + tsz.y + padY},
+                IM_COL32(80, 120, 255, 90), rounding, 0, 0.9f);
+
+            // White name text
+            ndl->AddText({px, py}, IM_COL32(235, 235, 255, 230), tag.name.c_str());
+        }
+
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
     }
 
     DrawMenuButton(); // always on top
@@ -919,6 +988,7 @@ void CoreGui::DrawHomePage() {
                 if (ImGui::Button("##sw", {sz, sz})) {
                     dst[0] = col.x; dst[1] = col.y; dst[2] = col.z;
                     m_avatarDirty = true;
+                    SaveAvatar();
                 }
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(3);
@@ -953,6 +1023,7 @@ void CoreGui::DrawHomePage() {
                     ImGuiColorEditFlags_NoSidePreview |
                     ImGuiColorEditFlags_PickerHueWheel)) {
                 m_avatarDirty = true;
+                SaveAvatar();
             }
             ImGui::PopID();
 

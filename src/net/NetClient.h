@@ -23,13 +23,14 @@ static constexpr NativeSocket kInvalidSocket = -1;
 #endif
 
 struct RemotePlayer {
-    bool      active = false;
-    uint8_t   id     = 0;
-    glm::vec3 pos    = {};
-    float     yaw    = 0.f;
-    glm::vec3 skin   = {0.976f, 0.820f, 0.173f};
-    glm::vec3 shirt  = {0.059f, 0.420f, 0.690f};
-    glm::vec3 pants  = {0.110f, 0.529f, 0.047f};
+    bool        active = false;
+    uint8_t     id     = 0;
+    glm::vec3   pos    = {};
+    float       yaw    = 0.f;
+    glm::vec3   skin   = {0.976f, 0.820f, 0.173f};
+    glm::vec3   shirt  = {0.059f, 0.420f, 0.690f};
+    glm::vec3   pants  = {0.110f, 0.529f, 0.047f};
+    std::string name;
 };
 
 class NetClient {

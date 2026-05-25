@@ -2,6 +2,7 @@
 #include <SDL.h>
 #include <imgui.h>
 #include <string>
+#include <vector>
 #include <future>
 #include "auth/AuthClient.h"
 
@@ -47,6 +48,10 @@ public:
     const float* GetAvatarPants() const { return m_avatarPants; }
     bool IsAvatarDirty()          const { return m_avatarDirty; }
     void ClearAvatarDirty()             { m_avatarDirty = false; }
+
+    // Nametags — call each frame before Render() with screen-space positions
+    struct NametagInfo { float x, y; std::string name; };
+    void SetNametags(std::vector<NametagInfo> tags) { m_nametags = std::move(tags); }
 
     // Auth / user info
     bool               IsLoggedIn()    const { return m_loggedIn; }
@@ -97,6 +102,13 @@ private:
     std::string m_authHost;
     uint16_t    m_authPort = 7777;
     std::string m_sessionPath;   // path to session.dat (written on login, deleted on logout)
+    std::string m_avatarPath;    // path to avatar.dat  (written whenever colours change)
+
+    void SaveAvatar();
+    void LoadAvatar();
+
+    // Nametag data set each frame by Engine
+    std::vector<NametagInfo> m_nametags;
 
     void SaveSession();
     void ClearSession();

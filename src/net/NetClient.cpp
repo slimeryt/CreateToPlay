@@ -201,6 +201,10 @@ void NetClient::ProcessPayload(const uint8_t* buf, int len) {
             r.skin   = {B2F(s.skinR),  B2F(s.skinG),  B2F(s.skinB)};
             r.shirt  = {B2F(s.shirtR), B2F(s.shirtG), B2F(s.shirtB)};
             r.pants  = {B2F(s.pantsR), B2F(s.pantsG), B2F(s.pantsB)};
+            // Name — copy and null-terminate safely
+            char nameBuf[21] = {};
+            std::strncpy(nameBuf, s.name, 20);
+            r.name = nameBuf;
         }
     }
 }

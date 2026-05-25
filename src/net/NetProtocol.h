@@ -53,7 +53,7 @@ struct PktPosition {
     float   x, y, z, yaw;
 };
 
-// One slot inside PKT_SNAPSHOT (26 bytes each)
+// One slot inside PKT_SNAPSHOT (46 bytes each)
 struct RemoteState {
     uint8_t id;
     float   x, y, z, yaw;
@@ -61,6 +61,8 @@ struct RemoteState {
     uint8_t skinR,  skinG,  skinB;
     uint8_t shirtR, shirtG, shirtB;
     uint8_t pantsR, pantsG, pantsB;
+    // Display name (null-terminated, up to 19 chars)
+    char    name[20];
 };
 
 // PKT_SNAPSHOT  payload = 1 + 1 + count*26  (max 262 bytes)

@@ -4,6 +4,8 @@
 #include <SDL.h>
 #include <glad/glad.h>
 #include <btBulletDynamicsCommon.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cstdio>
 #include <string>
@@ -286,6 +288,31 @@ void Engine::Render() {
     m_coreGui.SetConnected(m_netClient.IsConnected(), 1 + remotePlayers);
 
     m_coreGui.BeginFrame();
+
+    // ── Nametags — project remote player head positions to screen ────────────
+    {
+        int w = 1280, h = 720;
+        SDL_GetWindowSize(m_window.GetSDLWindow(), &w, &h);
+        glm::mat4 vp = m_camera.GetProjection() * m_camera.GetView();
+
+        std::vector<CoreGui::NametagInfo> tags;
+        for (const auto& r : m_netClient.GetRemotePlayers()) {
+            if (!r.active || r.name.empty()) continue;
+
+            // Point just above the head
+            glm::vec4 clip = vp * glm::vec4(r.pos + glm::vec3(0.f, 2.55f, 0.f), 1.f);
+            if (clip.w <= 0.f) continue;          // behind camera
+            glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            if (ndc.x < -1.f || ndc.x > 1.f ||
+                ndc.y < -1.f || ndc.y > 1.f) continue;  // off screen
+
+            float sx = (ndc.x + 1.f) * 0.5f * (float)w;
+            float sy = (1.f - ndc.y) * 0.5f * (float)h;
+            tags.push_back({sx, sy, r.name});
+        }
+        m_coreGui.SetNametags(std::move(tags));
+    }
+
     m_coreGui.Render();
 
     m_window.SwapBuffers();
