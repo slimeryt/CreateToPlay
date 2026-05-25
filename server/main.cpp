@@ -119,7 +119,8 @@ static void DisconnectClient(int i) {
     if (!c.active) return;
     printf("[Server] Player %d disconnected\n", c.id);
     close(c.fd);
-    c.fd = -1; c.active = false; c.buf.clear();
+    c.fd = -1; c.active = false; c.inGame = false; c.buf.clear();
+    memset(c.name, 0, sizeof(c.name));
 
     PktLeave leave{};
     leave.id = c.id;
@@ -282,8 +283,10 @@ int main() {
                 auto& c   = g_clients[slot];
                 c.fd      = newfd;
                 c.active  = true;
+                c.inGame  = false;
                 c.id      = (uint8_t)slot;
                 c.x = c.y = c.z = c.yaw = 0.f;
+                memset(c.name, 0, sizeof(c.name));
                 c.buf.clear();
                 printf("[Server] New connection in slot %d\n", slot);
             }
