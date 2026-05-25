@@ -1,15 +1,20 @@
 #include "CoreGui.h"
 #include "embedded/EmbeddedFont.h"
 #include "embedded/EmbeddedAssets.h"
+#include <glad/glad.h>
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 #include <SDL.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <string>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 
 void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
     IMGUI_CHECKVERSION();
@@ -37,6 +42,9 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
 
     ImGui_ImplSDL2_InitForOpenGL(window, glContext);
     ImGui_ImplOpenGL3_Init("#version 330 core");
+
+    // 3-D avatar preview FBO
+    InitAvatarPreview();
 
     // Read server address for auth (same source as game connection)
     {
@@ -101,7 +109,227 @@ void CoreGui::ClearSession() {
     if (!m_sessionPath.empty()) remove(m_sessionPath.c_str());
 }
 
+// ── 3-D avatar preview ────────────────────────────────────────────────────────
+
+static GLuint AvatarCompileShader(const char* vsrc, const char* fsrc) {
+    auto compile = [](GLenum type, const char* src) -> GLuint {
+        GLuint s = glCreateShader(type);
+        glShaderSource(s, 1, &src, nullptr);
+        glCompileShader(s);
+        GLint ok = 0; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char buf[512] = {}; glGetShaderInfoLog(s, 512, nullptr, buf);
+            printf("[AvatarPreview] Shader error: %s\n", buf);
+        }
+        return s;
+    };
+    GLuint vs = compile(GL_VERTEX_SHADER,   vsrc);
+    GLuint fs = compile(GL_FRAGMENT_SHADER, fsrc);
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs); glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    glDeleteShader(vs); glDeleteShader(fs);
+    return prog;
+}
+
+void CoreGui::InitAvatarPreview() {
+    // ── Shader ────────────────────────────────────────────────────────────────
+    const char* kVS = R"glsl(
+#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+uniform mat4 uMVP;
+uniform mat3 uNorm;
+out vec3 vN;
+void main() {
+    vN = normalize(uNorm * aNormal);
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+)glsl";
+
+    const char* kFS = R"glsl(
+#version 330 core
+in vec3 vN;
+out vec4 FragColor;
+uniform vec3 uColor;
+void main() {
+    vec3 L1 = normalize(vec3( 0.6,  1.0,  0.8));
+    vec3 L2 = normalize(vec3(-0.4,  0.3, -0.6));
+    float d1 = max(dot(vN, L1), 0.0);
+    float d2 = max(dot(vN, L2), 0.0) * 0.25;
+    vec3 c = (0.22 + 0.68*d1 + 0.10*d2) * uColor;
+    FragColor = vec4(c, 1.0);
+}
+)glsl";
+
+    m_avatarProg = AvatarCompileShader(kVS, kFS);
+
+    // ── Cube mesh (unit cube, 24 verts × 6 floats, 36 indices) ───────────────
+    static const float kV[] = {
+        // Front (z+)
+        -0.5f,-0.5f, 0.5f, 0,0,1,  0.5f,-0.5f, 0.5f, 0,0,1,
+         0.5f, 0.5f, 0.5f, 0,0,1, -0.5f, 0.5f, 0.5f, 0,0,1,
+        // Back (z-)
+         0.5f,-0.5f,-0.5f, 0,0,-1, -0.5f,-0.5f,-0.5f, 0,0,-1,
+        -0.5f, 0.5f,-0.5f, 0,0,-1,  0.5f, 0.5f,-0.5f, 0,0,-1,
+        // Left (x-)
+        -0.5f,-0.5f,-0.5f,-1,0,0, -0.5f,-0.5f, 0.5f,-1,0,0,
+        -0.5f, 0.5f, 0.5f,-1,0,0, -0.5f, 0.5f,-0.5f,-1,0,0,
+        // Right (x+)
+         0.5f,-0.5f, 0.5f, 1,0,0,  0.5f,-0.5f,-0.5f, 1,0,0,
+         0.5f, 0.5f,-0.5f, 1,0,0,  0.5f, 0.5f, 0.5f, 1,0,0,
+        // Top (y+)
+        -0.5f, 0.5f, 0.5f, 0,1,0,  0.5f, 0.5f, 0.5f, 0,1,0,
+         0.5f, 0.5f,-0.5f, 0,1,0, -0.5f, 0.5f,-0.5f, 0,1,0,
+        // Bottom (y-)
+        -0.5f,-0.5f,-0.5f, 0,-1,0,  0.5f,-0.5f,-0.5f, 0,-1,0,
+         0.5f,-0.5f, 0.5f, 0,-1,0, -0.5f,-0.5f, 0.5f, 0,-1,0,
+    };
+    static const unsigned short kI[] = {
+         0, 1, 2,  2, 3, 0,
+         4, 5, 6,  6, 7, 4,
+         8, 9,10, 10,11, 8,
+        12,13,14, 14,15,12,
+        16,17,18, 18,19,16,
+        20,21,22, 22,23,20,
+    };
+
+    glGenVertexArrays(1, (GLuint*)&m_avatarVAO);
+    glGenBuffers(1, (GLuint*)&m_avatarVBO);
+    glGenBuffers(1, (GLuint*)&m_avatarEBO);
+
+    glBindVertexArray((GLuint)m_avatarVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)m_avatarVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(kV), kV, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)m_avatarEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(kI), kI, GL_STATIC_DRAW);
+    // pos
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), (void*)0);
+    // normal
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), (void*)(3*sizeof(float)));
+    glBindVertexArray(0);
+
+    // ── FBO ───────────────────────────────────────────────────────────────────
+    glGenFramebuffers(1, (GLuint*)&m_avatarFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)m_avatarFBO);
+
+    // Colour texture
+    glGenTextures(1, (GLuint*)&m_avatarTex);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)m_avatarTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, kAvatarFBOW, kAvatarFBOH, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, (GLuint)m_avatarTex, 0);
+
+    // Depth renderbuffer
+    glGenRenderbuffers(1, (GLuint*)&m_avatarDepthRB);
+    glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)m_avatarDepthRB);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, kAvatarFBOW, kAvatarFBOH);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, (GLuint)m_avatarDepthRB);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        printf("[AvatarPreview] FBO incomplete!\n");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void CoreGui::ShutdownAvatarPreview() {
+    if (m_avatarFBO)     { glDeleteFramebuffers(1,  (GLuint*)&m_avatarFBO);     m_avatarFBO     = 0; }
+    if (m_avatarTex)     { glDeleteTextures(1,       (GLuint*)&m_avatarTex);     m_avatarTex     = 0; }
+    if (m_avatarDepthRB) { glDeleteRenderbuffers(1,  (GLuint*)&m_avatarDepthRB); m_avatarDepthRB = 0; }
+    if (m_avatarVAO)     { glDeleteVertexArrays(1,   (GLuint*)&m_avatarVAO);     m_avatarVAO     = 0; }
+    if (m_avatarVBO)     { glDeleteBuffers(1,         (GLuint*)&m_avatarVBO);     m_avatarVBO     = 0; }
+    if (m_avatarEBO)     { glDeleteBuffers(1,         (GLuint*)&m_avatarEBO);     m_avatarEBO     = 0; }
+    if (m_avatarProg)    { glDeleteProgram((GLuint)m_avatarProg);                  m_avatarProg    = 0; }
+}
+
+void CoreGui::RenderAvatarPreview() {
+    if (!m_avatarFBO || !m_avatarProg) return;
+
+    // ── Save GL state ─────────────────────────────────────────────────────────
+    GLint  prevFBO = 0, prevProg = 0, prevVAO = 0;
+    GLint  prevVP[4] = {};
+    GLboolean prevDepth = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean prevCull  = glIsEnabled(GL_CULL_FACE);
+    GLboolean prevBlend = glIsEnabled(GL_BLEND);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING,  &prevFBO);
+    glGetIntegerv(GL_VIEWPORT,              prevVP);
+    glGetIntegerv(GL_CURRENT_PROGRAM,      &prevProg);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
+
+    // ── Render to FBO ─────────────────────────────────────────────────────────
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)m_avatarFBO);
+    glViewport(0, 0, kAvatarFBOW, kAvatarFBOH);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glClearColor(0.08f, 0.08f, 0.12f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glUseProgram((GLuint)m_avatarProg);
+    glBindVertexArray((GLuint)m_avatarVAO);
+
+    // Camera — portrait-fit of R6 body
+    float aspect = (float)kAvatarFBOW / (float)kAvatarFBOH;
+    glm::mat4 proj = glm::perspective(glm::radians(45.f), aspect, 0.1f, 50.f);
+    glm::mat4 view = glm::lookAt(
+        glm::vec3(0.f,  0.04f, 7.f),
+        glm::vec3(0.f,  0.04f, 0.f),
+        glm::vec3(0.f,  1.f,   0.f));
+    glm::mat4 vp = proj * view;
+
+    // Slow auto-spin (full rotation every ~8 s, starts at 25° so 3/4 view on open)
+    float yaw = 0.436f + (float)(fmod(ImGui::GetTime() * 0.785, 6.2832));
+    glm::mat4 rootRot = glm::rotate(glm::mat4(1.f), yaw, glm::vec3(0,1,0));
+
+    GLint locMVP   = glGetUniformLocation((GLuint)m_avatarProg, "uMVP");
+    GLint locNorm  = glGetUniformLocation((GLuint)m_avatarProg, "uNorm");
+    GLint locColor = glGetUniformLocation((GLuint)m_avatarProg, "uColor");
+
+    struct Part { glm::vec3 off; glm::vec3 sz; int ci; };
+    const Part parts[] = {
+        {{ 0.f,     0.14f,  0.f},  {1.40f,1.40f,0.70f}, 1}, // torso  (shirt)
+        {{ 0.f,     1.51f,  0.f},  {1.20f,1.20f,1.20f}, 0}, // head   (skin)
+        {{-1.12f,   0.14f,  0.f},  {0.70f,1.40f,0.70f}, 0}, // L arm  (skin)
+        {{ 1.12f,   0.14f,  0.f},  {0.70f,1.40f,0.70f}, 0}, // R arm  (skin)
+        {{-0.385f, -1.33f,  0.f},  {0.63f,1.40f,0.70f}, 2}, // L leg  (pants)
+        {{ 0.385f, -1.33f,  0.f},  {0.63f,1.40f,0.70f}, 2}, // R leg  (pants)
+    };
+    const glm::vec3 colors[3] = {
+        {m_avatarSkin[0],  m_avatarSkin[1],  m_avatarSkin[2] },
+        {m_avatarShirt[0], m_avatarShirt[1], m_avatarShirt[2]},
+        {m_avatarPants[0], m_avatarPants[1], m_avatarPants[2]},
+    };
+
+    // Draw back-to-front isn't needed (depth test handles it), just draw all
+    for (auto& p : parts) {
+        glm::vec3 wpos  = glm::vec3(rootRot * glm::vec4(p.off, 1.f));
+        glm::mat4 model = glm::translate(glm::mat4(1.f), wpos)
+                        * glm::rotate(glm::mat4(1.f), yaw, glm::vec3(0,1,0))
+                        * glm::scale(glm::mat4(1.f), p.sz);
+        glm::mat4 mvp   = vp * model;
+        glm::mat3 norm  = glm::mat3(glm::transpose(glm::inverse(model)));
+        glUniformMatrix4fv(locMVP,  1, GL_FALSE, glm::value_ptr(mvp));
+        glUniformMatrix3fv(locNorm, 1, GL_FALSE, glm::value_ptr(norm));
+        glUniform3fv(locColor, 1, glm::value_ptr(colors[p.ci]));
+        glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, nullptr);
+    }
+
+    // ── Restore GL state ──────────────────────────────────────────────────────
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFBO);
+    glViewport(prevVP[0], prevVP[1], prevVP[2], prevVP[3]);
+    glUseProgram((GLuint)prevProg);
+    glBindVertexArray((GLuint)prevVAO);
+    if (!prevDepth) glDisable(GL_DEPTH_TEST);
+    if (!prevCull)  glDisable(GL_CULL_FACE);
+    if  (prevBlend) glEnable(GL_BLEND);
+}
+
 void CoreGui::Shutdown() {
+    ShutdownAvatarPreview();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
@@ -496,46 +724,35 @@ void CoreGui::DrawHomePage() {
         ImGui::PopStyleColor();
     }
 
-    // ── Username chip + sign-out at the bottom of the sidebar ────────────────
+    // ── Username chip at the bottom of the sidebar (display only) ───────────
     {
-        const float chipH  = 44.f;
-        const float chipY  = H - chipH - 10.f;
-        const float chipX  = 6.f;
-        const float chipW  = sideW - 12.f;
+        const float chipH = 44.f;
+        const float chipY = H - chipH - 10.f;
+        const float chipX = 6.f;
+        const float chipW = sideW - 12.f;
 
-        ImGui::SetCursorPos({chipX, chipY});
-        bool chipHov = ImGui::InvisibleButton("##signout", {chipW, chipH});
+        dl->AddRectFilled({chipX, chipY}, {chipX + chipW, chipY + chipH},
+            IM_COL32(20, 20, 32, 200), 8.f);
+        dl->AddRect({chipX, chipY}, {chipX + chipW, chipY + chipH},
+            IM_COL32(50, 50, 80, 140), 8.f, 0, 1.f);
 
-        // Background pill — red tint on hover to hint sign-out
-        bool hov = ImGui::IsItemHovered();
-        ImU32 bgCol = hov ? IM_COL32(50, 14, 14, 220) : IM_COL32(20, 20, 32, 200);
-        ImU32 brCol = hov ? IM_COL32(160, 40, 40, 180) : IM_COL32(50, 50, 80, 140);
-        dl->AddRectFilled({chipX, chipY}, {chipX + chipW, chipY + chipH}, bgCol, 8.f);
-        dl->AddRect({chipX, chipY}, {chipX + chipW, chipY + chipH}, brCol, 8.f, 0, 1.f);
-
-        // Avatar circle
+        // Avatar initial circle
         float cx2 = chipX + 18.f;
         float cy2 = chipY + chipH * 0.5f;
-        dl->AddCircleFilled({cx2, cy2}, 11.f,
-            hov ? IM_COL32(200, 60, 60, 220) : IM_COL32(28, 92, 240, 200));
+        dl->AddCircleFilled({cx2, cy2}, 11.f, IM_COL32(28, 92, 240, 200));
         char init[2] = { (char)toupper((unsigned char)m_username[0]), '\0' };
         ImVec2 itsz = ImGui::CalcTextSize(init);
         dl->AddText({cx2 - itsz.x * 0.5f, cy2 - itsz.y * 0.5f},
             IM_COL32(255, 255, 255, 255), init);
 
-        // Name or "Sign out" hint
-        const char* nameStr = hov ? "Sign out" : m_username.c_str();
-        // truncate if needed
-        std::string display = nameStr;
-        if (!hov && display.size() > 8) display = display.substr(0, 7) + ".";
+        // Truncated username label
+        std::string display = m_username;
+        if (display.size() > 8) display = display.substr(0, 7) + ".";
         float nw = ImGui::CalcTextSize(display.c_str()).x;
         float nx = cx2 + 14.f;
-        ImU32 textCol = hov ? IM_COL32(255, 100, 100, 255) : IM_COL32(200, 200, 220, 255);
         if (nx + nw < chipX + chipW - 4.f)
             dl->AddText({nx, cy2 - ImGui::GetTextLineHeight() * 0.5f},
-                textCol, display.c_str());
-
-        if (chipHov) ClearSession();  // click = sign out
+                IM_COL32(200, 200, 220, 255), display.c_str());
     }
 
     // ── Content area ──────────────────────────────────────────────────────────
@@ -624,41 +841,27 @@ void CoreGui::DrawHomePage() {
         const float editW    = contentW - previewW - 40.f;
         const float topY     = 30.f + ImGui::GetTextLineHeight() + 22.f;
 
-        // ── Character preview ─────────────────────────────────────────────────
+        // ── 3-D character preview (FBO texture) ───────────────────────────────
         {
-            ImVec2 pvTL = ImGui::GetCursorScreenPos();
-            pvTL.x = sideW;
-            pvTL.y = topY;  // absolute screen pos
+            // Render the avatar to the off-screen FBO (safe here — before ImGui::Render)
+            RenderAvatarPreview();
 
-            // Figure centre
-            float cx = sideW + previewW * 0.5f;
-            float ty = topY + 10.f;  // top of head in screen Y
+            // Display the FBO colour texture as an ImGui image.
+            // UV is flipped vertically (OpenGL origin = bottom-left, ImGui = top-left).
+            const float dispW = previewW - 20.f;
+            const float dispH = dispW * (float)kAvatarFBOH / (float)kAvatarFBOW;
 
-            // Convert our 0-1 floats to ImU32 colours
-            auto C = [](const float* f) -> ImU32 {
-                return IM_COL32(
-                    (int)(f[0]*255), (int)(f[1]*255), (int)(f[2]*255), 255);
-            };
-            ImU32 cSkin  = C(m_avatarSkin);
-            ImU32 cShirt = C(m_avatarShirt);
-            ImU32 cPants = C(m_avatarPants);
+            // Dark card behind the image
+            ImVec2 cardTL = {10.f, topY - 4.f};
+            ImVec2 cardBR = {10.f + previewW - 20.f, topY + dispH + 4.f};
+            cdl->AddRectFilled(cardTL, cardBR, IM_COL32(12, 12, 18, 255), 8.f);
+            cdl->AddRect      (cardTL, cardBR, IM_COL32(40, 40, 65, 180),  8.f, 0, 1.f);
 
-            // Head
-            cdl->AddRectFilled({cx-18.f, ty},       {cx+18.f, ty+36.f},  cSkin,  3.f);
-            // Torso
-            cdl->AddRectFilled({cx-24.f, ty+38.f},  {cx+24.f, ty+88.f},  cShirt, 2.f);
-            // Left arm
-            cdl->AddRectFilled({cx-40.f, ty+38.f},  {cx-26.f, ty+84.f},  cSkin,  2.f);
-            // Right arm
-            cdl->AddRectFilled({cx+26.f, ty+38.f},  {cx+40.f, ty+84.f},  cSkin,  2.f);
-            // Left leg
-            cdl->AddRectFilled({cx-22.f, ty+90.f},  {cx-5.f,  ty+140.f}, cPants, 2.f);
-            // Right leg
-            cdl->AddRectFilled({cx+5.f,  ty+90.f},  {cx+22.f, ty+140.f}, cPants, 2.f);
-
-            // Subtle border around preview area
-            cdl->AddRect({sideW+6.f, topY-4.f}, {sideW+previewW-6.f, topY+160.f},
-                IM_COL32(40,40,60,120), 8.f, 0, 1.f);
+            ImGui::SetCursorPos({10.f, topY});
+            ImGui::Image(
+                (ImTextureID)(intptr_t)(unsigned int)m_avatarTex,
+                {dispW, dispH},
+                {0.f, 1.f}, {1.f, 0.f});   // flip Y for OpenGL→ImGui
         }
 
         // ── Colour editors ────────────────────────────────────────────────────
@@ -765,13 +968,13 @@ void CoreGui::DrawHomePage() {
         // ── More / Options tab ────────────────────────────────────────────────
         ImGui::SetCursorPos({padX, 30.f});
         ImGui::PushFont(m_fontTitle);
-        ImGui::TextColored({0.88f, 0.88f, 0.94f, 1.f}, "More");
+        ImGui::TextColored({0.88f, 0.88f, 0.94f, 1.f}, "Options");
         ImGui::PopFont();
 
         struct OptionCard { const char* label; };
         static const OptionCard kOpts[] = { {"Settings"}, {"Profile"} };
 
-        const float csz    = 128.f;   // square card size
+        const float csz    = 128.f;
         const float corner = 14.f;
         const float gapX   = 18.f;
         const float cardY  = 30.f + ImGui::GetTextLineHeight() + 22.f;
@@ -784,7 +987,6 @@ void CoreGui::DrawHomePage() {
 
             bool hov = ImGui::IsMouseHoveringRect(tl, br);
 
-            // Card background
             cdl->AddRectFilled(tl, br,
                 hov ? IM_COL32(20, 20, 30, 255) : IM_COL32(13, 13, 20, 255), corner);
             cdl->AddRect(tl, br,
@@ -792,11 +994,10 @@ void CoreGui::DrawHomePage() {
                 corner, 0, 1.2f);
 
             float cx  = tl.x + csz * 0.5f;
-            float icy = tl.y + csz * 0.34f;  // icon centre Y
+            float icy = tl.y + csz * 0.34f;
             ImU32 ic  = hov ? IM_COL32(100, 160, 255, 255) : IM_COL32(160, 160, 180, 255);
 
             if (i == 0) {
-                // Settings icon — three slider lines
                 for (int s = 0; s < 3; ++s) {
                     float ly2 = icy - 10.f + s * 10.f;
                     cdl->AddRectFilled({cx - 18.f, ly2 - 1.5f}, {cx + 18.f, ly2 + 1.5f}, ic, 2.f);
@@ -805,17 +1006,57 @@ void CoreGui::DrawHomePage() {
                     cdl->AddCircle      ({kx, ly2}, 4.f, ic, 12, 1.5f);
                 }
             } else {
-                // Profile icon — head + body
                 cdl->AddCircleFilled({cx, icy - 8.f}, 9.f, ic);
                 cdl->AddRectFilled({cx - 11.f, icy + 3.f}, {cx + 11.f, icy + 18.f}, ic, 5.f);
             }
 
-            // Label centred at bottom of card
             float lw2 = ImGui::CalcTextSize(kOpts[i].label).x;
             ImGui::SetCursorPos({lx + (csz - lw2) * 0.5f, cardY + csz * 0.72f});
             ImGui::TextColored(
                 hov ? ImVec4(1.f, 1.f, 1.f, 1.f) : ImVec4(0.65f, 0.65f, 0.75f, 1.f),
                 "%s", kOpts[i].label);
+        }
+
+        // ── Sign Out button ───────────────────────────────────────────────────
+        {
+            const float btnW = csz * 2.f + gapX;
+            const float btnH = 44.f;
+            const float btnY = cardY + csz + 24.f;
+
+            ImGui::SetCursorPos({padX, btnY});
+            ImVec2 tl = ImGui::GetCursorScreenPos();
+            ImVec2 br = {tl.x + btnW, tl.y + btnH};
+
+            bool hov = ImGui::IsMouseHoveringRect(tl, br);
+            bool clk = hov && ImGui::IsMouseClicked(0);
+
+            // Red-tinted button
+            ImU32 bgCol = hov ? IM_COL32(60, 14, 14, 240) : IM_COL32(30, 10, 10, 220);
+            ImU32 brCol = hov ? IM_COL32(200, 50, 50, 220) : IM_COL32(100, 30, 30, 160);
+            cdl->AddRectFilled(tl, br, bgCol, 10.f);
+            cdl->AddRect      (tl, br, brCol, 10.f, 0, 1.2f);
+
+            // Power-off icon
+            float icx = tl.x + 22.f;
+            float icy = tl.y + btnH * 0.5f;
+            ImU32 ic  = hov ? IM_COL32(255, 80, 80, 255) : IM_COL32(200, 70, 70, 220);
+            cdl->AddCircle      ({icx, icy}, 8.f,  ic, 20, 1.8f);
+            cdl->AddLine        ({icx, icy - 10.f}, {icx, icy - 4.f}, ic, 2.2f);
+            // Gap in the circle (white out a small arc at top)
+            cdl->AddRectFilled  ({icx - 3.f, icy - 11.f}, {icx + 3.f, icy - 7.f},
+                IM_COL32(30, 10, 10, 255));
+
+            // Label
+            const char* signoutLbl = "Sign Out";
+            float lw = ImGui::CalcTextSize(signoutLbl).x;
+            float lx = icx + 18.f;
+            float ly = icy - ImGui::GetTextLineHeight() * 0.5f - tl.y;
+            ImGui::SetCursorPos({padX + 36.f, btnY + ly});
+            ImGui::TextColored(
+                hov ? ImVec4(1.f, 0.5f, 0.5f, 1.f) : ImVec4(0.75f, 0.35f, 0.35f, 1.f),
+                "%s", signoutLbl);
+
+            if (clk) ClearSession();
         }
     }
 

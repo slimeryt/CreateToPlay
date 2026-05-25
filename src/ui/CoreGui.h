@@ -5,6 +5,10 @@
 #include <future>
 #include "auth/AuthClient.h"
 
+// Forward-declare OpenGL types without pulling in glad.h here
+// (GLuint == unsigned int on every platform we target)
+using GuiGLuint = unsigned int;
+
 class CoreGui {
 public:
     void Init(SDL_Window* window, SDL_GLContext glContext);
@@ -54,7 +58,23 @@ private:
     void DrawHomePage();
     void DrawAuthScreen();   // login / signup card (calls server)
 
+    // 3-D avatar preview (off-screen FBO rendered before ImGui flushes)
+    void InitAvatarPreview();
+    void ShutdownAvatarPreview();
+    void RenderAvatarPreview();   // renders to m_avatarFBO each frame on Avatar tab
+
     ImFont* m_fontTitle        = nullptr;
+
+    // Avatar 3-D preview FBO (unsigned int == GLuint, avoids glad.h in header)
+    static constexpr int kAvatarFBOW = 200;
+    static constexpr int kAvatarFBOH = 280;
+    GuiGLuint m_avatarFBO     = 0;
+    GuiGLuint m_avatarTex     = 0;
+    GuiGLuint m_avatarDepthRB = 0;
+    GuiGLuint m_avatarVAO     = 0;
+    GuiGLuint m_avatarVBO     = 0;
+    GuiGLuint m_avatarEBO     = 0;
+    GuiGLuint m_avatarProg    = 0;
 
     int  m_sidebarTab          = 0;
     bool m_wantsLeave          = false;
