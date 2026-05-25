@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <sys/select.h>
 #include <errno.h>
+#include <time.h>
 
 #include <cstdio>
 #include <cstring>
