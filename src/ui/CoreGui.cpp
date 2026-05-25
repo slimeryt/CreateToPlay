@@ -1080,6 +1080,10 @@ void CoreGui::DrawHomePage() {
         return;
     }
 
+    // Always poll async futures — even when a full-screen overlay is open,
+    // so background fetches (profile load, friend ops) complete correctly.
+    PollFriendFutures();
+
     // Settings is full-screen — skip the home page entirely while it's open
     if (m_settingsOpen) {
         DrawSettingsPanel();
@@ -1134,9 +1138,6 @@ void CoreGui::DrawHomePage() {
         ImGui::SetCursorPos({lx, ly});
         ImGui::TextColored({1.f, 1.f, 1.f, 1.f}, "%s", mono);
     }
-
-    // Poll friend async futures on every home-page frame
-    PollFriendFutures();
 
     // Auto-refresh friends list (timer counts down, refreshes when 0)
     {
