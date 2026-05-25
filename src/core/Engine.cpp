@@ -241,41 +241,33 @@ void Engine::Render() {
     // ── Shadow pass ───────────────────────────────────────────────────────────
     m_renderer.BeginShadowPass();
     m_workspace.RenderAll(m_renderer);
-    // Shadow pass — remote players (colour unused in shadow shader)
     for (const auto& r : m_netClient.GetRemotePlayers()) {
         if (!r.active) continue;
-        m_renderer.DrawBox(r.pos + glm::vec3(0.f,    0.14f,  0.f), {1.40f,1.40f,0.70f}, {}, r.yaw);
-        m_renderer.DrawBox(r.pos + glm::vec3(0.f,    1.51f,  0.f), {1.20f,1.20f,1.20f}, {}, r.yaw);
-        m_renderer.DrawBox(r.pos + glm::vec3(-1.12f, 0.14f,  0.f), {0.70f,1.40f,0.70f}, {}, r.yaw);
-        m_renderer.DrawBox(r.pos + glm::vec3( 1.12f, 0.14f,  0.f), {0.70f,1.40f,0.70f}, {}, r.yaw);
-        m_renderer.DrawBox(r.pos + glm::vec3(-0.385f,-1.33f, 0.f), {0.63f,1.40f,0.70f}, {}, r.yaw);
-        m_renderer.DrawBox(r.pos + glm::vec3( 0.385f,-1.33f, 0.f), {0.63f,1.40f,0.70f}, {}, r.yaw);
+        // Rotate local-space offsets by the player's facing yaw so arms/legs
+        // stay attached to the body when the character turns.
+        glm::mat4 rot = glm::rotate(glm::mat4(1.f), r.yaw, glm::vec3(0,1,0));
+        auto W = [&](glm::vec3 local) { return r.pos + glm::vec3(rot * glm::vec4(local, 0.f)); };
+        m_renderer.DrawBox(W({ 0.f,     0.14f,  0.f}), {1.40f,1.40f,0.70f}, {}, r.yaw);
+        m_renderer.DrawBox(W({ 0.f,     1.51f,  0.f}), {1.20f,1.20f,1.20f}, {}, r.yaw);
+        m_renderer.DrawBox(W({-1.12f,   0.14f,  0.f}), {0.70f,1.40f,0.70f}, {}, r.yaw);
+        m_renderer.DrawBox(W({ 1.12f,   0.14f,  0.f}), {0.70f,1.40f,0.70f}, {}, r.yaw);
+        m_renderer.DrawBox(W({-0.385f, -1.33f,  0.f}), {0.63f,1.40f,0.70f}, {}, r.yaw);
+        m_renderer.DrawBox(W({ 0.385f, -1.33f,  0.f}), {0.63f,1.40f,0.70f}, {}, r.yaw);
     }
 
     // ── Main pass ─────────────────────────────────────────────────────────────
     m_renderer.BeginMainPass(m_camera);
     m_workspace.RenderAll(m_renderer);
-    // Render remote players with their chosen avatar colours
     for (const auto& r : m_netClient.GetRemotePlayers()) {
         if (!r.active) continue;
-        // Torso (shirt)
-        m_renderer.DrawBox(r.pos + glm::vec3(0.f,    0.14f,  0.f),
-                           {1.40f, 1.40f, 0.70f}, r.shirt, r.yaw);
-        // Head (skin)
-        m_renderer.DrawBox(r.pos + glm::vec3(0.f,    1.51f,  0.f),
-                           {1.20f, 1.20f, 1.20f}, r.skin,  r.yaw);
-        // Left arm (skin)
-        m_renderer.DrawBox(r.pos + glm::vec3(-1.12f, 0.14f,  0.f),
-                           {0.70f, 1.40f, 0.70f}, r.skin,  r.yaw);
-        // Right arm (skin)
-        m_renderer.DrawBox(r.pos + glm::vec3( 1.12f, 0.14f,  0.f),
-                           {0.70f, 1.40f, 0.70f}, r.skin,  r.yaw);
-        // Left leg (pants)
-        m_renderer.DrawBox(r.pos + glm::vec3(-0.385f,-1.33f, 0.f),
-                           {0.63f, 1.40f, 0.70f}, r.pants, r.yaw);
-        // Right leg (pants)
-        m_renderer.DrawBox(r.pos + glm::vec3( 0.385f,-1.33f, 0.f),
-                           {0.63f, 1.40f, 0.70f}, r.pants, r.yaw);
+        glm::mat4 rot = glm::rotate(glm::mat4(1.f), r.yaw, glm::vec3(0,1,0));
+        auto W = [&](glm::vec3 local) { return r.pos + glm::vec3(rot * glm::vec4(local, 0.f)); };
+        m_renderer.DrawBox(W({ 0.f,     0.14f,  0.f}), {1.40f,1.40f,0.70f}, r.shirt, r.yaw);
+        m_renderer.DrawBox(W({ 0.f,     1.51f,  0.f}), {1.20f,1.20f,1.20f}, r.skin,  r.yaw);
+        m_renderer.DrawBox(W({-1.12f,   0.14f,  0.f}), {0.70f,1.40f,0.70f}, r.skin,  r.yaw);
+        m_renderer.DrawBox(W({ 1.12f,   0.14f,  0.f}), {0.70f,1.40f,0.70f}, r.skin,  r.yaw);
+        m_renderer.DrawBox(W({-0.385f, -1.33f,  0.f}), {0.63f,1.40f,0.70f}, r.pants, r.yaw);
+        m_renderer.DrawBox(W({ 0.385f, -1.33f,  0.f}), {0.63f,1.40f,0.70f}, r.pants, r.yaw);
     }
 
     // ── Post-process ──────────────────────────────────────────────────────────
