@@ -1,12 +1,15 @@
 #include "CoreGui.h"
 #include "embedded/EmbeddedFont.h"
+#include "embedded/EmbeddedAssets.h"
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 #include <SDL.h>
 #include <string>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <cstring>
 
 void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
     IMGUI_CHECKVERSION();
@@ -34,6 +37,33 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
 
     ImGui_ImplSDL2_InitForOpenGL(window, glContext);
     ImGui_ImplOpenGL3_Init("#version 330 core");
+
+    // Read server address for auth (same source as game connection)
+    {
+        std::string serverAddr;
+        char* base = SDL_GetBasePath();
+        if (base) {
+            std::string cfgPath = std::string(base) + "assets/server.txt";
+            SDL_free(base);
+            if (FILE* f = fopen(cfgPath.c_str(), "r")) {
+                char line[256] = {};
+                if (fgets(line, sizeof(line), f)) {
+                    for (char* p = line; *p; ++p)
+                        if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+                    serverAddr = line;
+                }
+                fclose(f);
+            }
+        }
+        if (serverAddr.empty()) serverAddr = kEmbeddedServerAddr;
+        auto colon = serverAddr.rfind(':');
+        if (colon != std::string::npos) {
+            m_authHost = serverAddr.substr(0, colon);
+            m_authPort = (uint16_t)std::stoi(serverAddr.substr(colon + 1));
+        } else {
+            m_authHost = serverAddr;
+        }
+    }
 }
 
 void CoreGui::Shutdown() {
@@ -331,6 +361,11 @@ void CoreGui::RenderHomePage() {
 }
 
 void CoreGui::DrawHomePage() {
+    if (!m_loggedIn) {
+        DrawAuthScreen();
+        return;
+    }
+
     ImGuiIO& io   = ImGui::GetIO();
     const float W = io.DisplaySize.x;
     const float H = io.DisplaySize.y;
@@ -426,6 +461,39 @@ void CoreGui::DrawHomePage() {
         ImGui::PopStyleColor();
     }
 
+    // ── Username chip at the bottom of the sidebar ───────────────────────────
+    {
+        const float chipH  = 44.f;
+        const float chipY  = H - chipH - 10.f;
+        const float chipX  = 6.f;
+        const float chipW  = sideW - 12.f;
+
+        // Background pill
+        dl->AddRectFilled({chipX, chipY}, {chipX + chipW, chipY + chipH},
+            IM_COL32(20, 20, 32, 200), 8.f);
+        dl->AddRect({chipX, chipY}, {chipX + chipW, chipY + chipH},
+            IM_COL32(50, 50, 80, 140), 8.f, 0, 1.f);
+
+        // Avatar circle
+        float cx2 = chipX + 18.f;
+        float cy2 = chipY + chipH * 0.5f;
+        dl->AddCircleFilled({cx2, cy2}, 11.f, IM_COL32(28, 92, 240, 200));
+        // First-letter initial
+        char init[2] = { (char)toupper((unsigned char)m_username[0]), '\0' };
+        ImVec2 itsz = ImGui::CalcTextSize(init);
+        dl->AddText({cx2 - itsz.x * 0.5f, cy2 - itsz.y * 0.5f},
+            IM_COL32(255, 255, 255, 255), init);
+
+        // Name (truncated to fit)
+        std::string display = m_username;
+        if (display.size() > 8) display = display.substr(0, 7) + ".";
+        float nw = ImGui::CalcTextSize(display.c_str()).x;
+        float nx = cx2 + 14.f;
+        if (nx + nw < chipX + chipW - 4.f)
+            dl->AddText({nx, cy2 - ImGui::GetTextLineHeight() * 0.5f},
+                IM_COL32(200, 200, 220, 255), display.c_str());
+    }
+
     // ── Content area ──────────────────────────────────────────────────────────
     ImGui::SetCursorPos({sideW, 0.f});
     ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.f, 0.f, 0.f, 0.f});
@@ -500,14 +568,154 @@ void CoreGui::DrawHomePage() {
         }
 
     } else if (m_sidebarTab == 1) {
-        // ── Avatar tab — coming soon ──────────────────────────────────────────
-        float tw = ImGui::CalcTextSize("Avatar").x;
-        ImGui::SetCursorPos({(W - sideW - tw) * 0.5f, H * 0.44f});
-        ImGui::TextColored({0.35f, 0.35f, 0.45f, 1.f}, "Avatar");
-        const char* sub = "Coming soon";
-        float sw = ImGui::CalcTextSize(sub).x;
-        ImGui::SetCursorPos({(W - sideW - sw) * 0.5f, H * 0.44f + 24.f});
-        ImGui::TextColored({0.28f, 0.28f, 0.36f, 1.f}, "%s", sub);
+        // ── Avatar tab ────────────────────────────────────────────────────────
+        ImGui::SetCursorPos({padX, 30.f});
+        ImGui::PushFont(m_fontTitle);
+        ImGui::TextColored({0.88f, 0.88f, 0.94f, 1.f}, "Avatar");
+        ImGui::PopFont();
+
+        const float contentW = W - sideW;
+        const float previewW = 200.f;
+        const float editX    = sideW + previewW + 20.f;
+        const float editW    = contentW - previewW - 40.f;
+        const float topY     = 30.f + ImGui::GetTextLineHeight() + 22.f;
+
+        // ── Character preview ─────────────────────────────────────────────────
+        {
+            ImVec2 pvTL = ImGui::GetCursorScreenPos();
+            pvTL.x = sideW;
+            pvTL.y = topY;  // absolute screen pos
+
+            // Figure centre
+            float cx = sideW + previewW * 0.5f;
+            float ty = topY + 10.f;  // top of head in screen Y
+
+            // Convert our 0-1 floats to ImU32 colours
+            auto C = [](const float* f) -> ImU32 {
+                return IM_COL32(
+                    (int)(f[0]*255), (int)(f[1]*255), (int)(f[2]*255), 255);
+            };
+            ImU32 cSkin  = C(m_avatarSkin);
+            ImU32 cShirt = C(m_avatarShirt);
+            ImU32 cPants = C(m_avatarPants);
+
+            // Head
+            cdl->AddRectFilled({cx-18.f, ty},       {cx+18.f, ty+36.f},  cSkin,  3.f);
+            // Torso
+            cdl->AddRectFilled({cx-24.f, ty+38.f},  {cx+24.f, ty+88.f},  cShirt, 2.f);
+            // Left arm
+            cdl->AddRectFilled({cx-40.f, ty+38.f},  {cx-26.f, ty+84.f},  cSkin,  2.f);
+            // Right arm
+            cdl->AddRectFilled({cx+26.f, ty+38.f},  {cx+40.f, ty+84.f},  cSkin,  2.f);
+            // Left leg
+            cdl->AddRectFilled({cx-22.f, ty+90.f},  {cx-5.f,  ty+140.f}, cPants, 2.f);
+            // Right leg
+            cdl->AddRectFilled({cx+5.f,  ty+90.f},  {cx+22.f, ty+140.f}, cPants, 2.f);
+
+            // Subtle border around preview area
+            cdl->AddRect({sideW+6.f, topY-4.f}, {sideW+previewW-6.f, topY+160.f},
+                IM_COL32(40,40,60,120), 8.f, 0, 1.f);
+        }
+
+        // ── Colour editors ────────────────────────────────────────────────────
+        // Preset swatch colours
+        static const ImVec4 kSkinPresets[] = {
+            {0.976f, 0.820f, 0.173f, 1.f}, // noob yellow
+            {1.000f, 0.800f, 0.620f, 1.f}, // light skin
+            {0.870f, 0.670f, 0.450f, 1.f}, // medium skin
+            {0.550f, 0.360f, 0.210f, 1.f}, // dark skin
+            {0.300f, 0.700f, 0.950f, 1.f}, // cyan
+            {0.900f, 0.300f, 0.600f, 1.f}, // pink
+        };
+        static const ImVec4 kShirtPresets[] = {
+            {0.059f, 0.420f, 0.690f, 1.f}, // noob blue
+            {0.820f, 0.120f, 0.120f, 1.f}, // red
+            {0.100f, 0.600f, 0.220f, 1.f}, // green
+            {0.860f, 0.680f, 0.080f, 1.f}, // yellow
+            {0.540f, 0.140f, 0.760f, 1.f}, // purple
+            {0.880f, 0.440f, 0.090f, 1.f}, // orange
+            {0.120f, 0.120f, 0.140f, 1.f}, // black
+            {0.900f, 0.900f, 0.920f, 1.f}, // white
+        };
+        static const ImVec4 kPantsPresets[] = {
+            {0.110f, 0.529f, 0.047f, 1.f}, // noob green
+            {0.100f, 0.180f, 0.480f, 1.f}, // dark blue
+            {0.160f, 0.160f, 0.180f, 1.f}, // dark grey
+            {0.600f, 0.180f, 0.100f, 1.f}, // maroon
+            {0.400f, 0.280f, 0.150f, 1.f}, // brown
+            {0.300f, 0.550f, 0.600f, 1.f}, // teal
+            {0.120f, 0.120f, 0.140f, 1.f}, // black
+            {0.820f, 0.820f, 0.840f, 1.f}, // light grey
+        };
+
+        // Helper: draw a row of colour swatches; clicking one writes into dst[3]
+        auto DrawSwatches = [&](const char* id, float* dst, const ImVec4* presets, int n) {
+            ImGui::PushID(id);
+            const float sz = 22.f;
+            const float gap = 4.f;
+            for (int k = 0; k < n; ++k) {
+                if (k > 0) ImGui::SameLine(0.f, gap);
+                ImGui::PushID(k);
+                ImVec4 col = presets[k];
+                bool isCurrent = (fabsf(dst[0]-col.x)<0.01f &&
+                                  fabsf(dst[1]-col.y)<0.01f &&
+                                  fabsf(dst[2]-col.z)<0.01f);
+                if (isCurrent)
+                    ImGui::PushStyleColor(ImGuiCol_Button, col);
+                else
+                    ImGui::PushStyleColor(ImGuiCol_Button,
+                        ImVec4(col.x*0.7f, col.y*0.7f, col.z*0.7f, 1.f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, col);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                    ImVec4(col.x*0.85f, col.y*0.85f, col.z*0.85f, 1.f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.f);
+                if (ImGui::Button("##sw", {sz, sz})) {
+                    dst[0] = col.x; dst[1] = col.y; dst[2] = col.z;
+                    m_avatarDirty = true;
+                }
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(3);
+                ImGui::PopID();
+            }
+            ImGui::PopID();
+        };
+
+        struct ColorRow { const char* label; float* col; const ImVec4* presets; int n; };
+        ColorRow rows[] = {
+            { "Skin  ",  m_avatarSkin,  kSkinPresets,  6 },
+            { "Shirt ",  m_avatarShirt, kShirtPresets, 8 },
+            { "Pants ",  m_avatarPants, kPantsPresets, 8 },
+        };
+
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8.f, 16.f});
+
+        float rowY = topY;
+        for (auto& row : rows) {
+            ImGui::SetCursorPos({editX - sideW, rowY});
+
+            // Label
+            ImGui::TextColored({0.70f, 0.70f, 0.80f, 1.f}, "%s", row.label);
+            ImGui::SameLine(0.f, 12.f);
+
+            // Full colour picker button
+            ImGui::PushID(row.label);
+            float prevR = row.col[0], prevG = row.col[1], prevB = row.col[2];
+            if (ImGui::ColorEdit3("##col", row.col,
+                    ImGuiColorEditFlags_NoLabel |
+                    ImGuiColorEditFlags_NoSidePreview |
+                    ImGuiColorEditFlags_PickerHueWheel)) {
+                m_avatarDirty = true;
+            }
+            ImGui::PopID();
+
+            // Presets row below
+            ImGui::SetCursorPos({editX - sideW, rowY + 30.f});
+            DrawSwatches(row.label, row.col, row.presets, row.n);
+            rowY += 80.f;
+        }
+
+        ImGui::PopStyleVar(2);
 
     } else {
         // ── More / Options tab ────────────────────────────────────────────────
@@ -573,4 +781,231 @@ void CoreGui::DrawHomePage() {
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+}
+
+// ── Auth screen (login / signup) ──────────────────────────────────────────────
+
+void CoreGui::DrawAuthScreen() {
+    ImGuiIO& io = ImGui::GetIO();
+    const float W = io.DisplaySize.x;
+    const float H = io.DisplaySize.y;
+    const bool isSignup = (m_authState == AuthState::Signup);
+
+    // ── Poll async auth result ────────────────────────────────────────────────
+    if (m_authInFlight && m_authFuture.valid()) {
+        auto status = m_authFuture.wait_for(std::chrono::seconds(0));
+        if (status == std::future_status::ready) {
+            AuthResult res = m_authFuture.get();
+            m_authInFlight = false;
+            if (res.ok) {
+                m_loggedIn = true;
+                m_username = m_pendingUser;
+                memset(m_inputUser,        0, sizeof(m_inputUser));
+                memset(m_inputPass,        0, sizeof(m_inputPass));
+                memset(m_inputPassConfirm, 0, sizeof(m_inputPassConfirm));
+                m_authError[0] = '\0';
+            } else {
+                snprintf(m_authError, sizeof(m_authError), "%s", res.error.c_str());
+            }
+        }
+    }
+    if (m_loggedIn) return;  // home screen takes over next frame
+
+    // ── Full-screen background ────────────────────────────────────────────────
+    ImGui::SetNextWindowPos({0.f, 0.f});
+    ImGui::SetNextWindowSize({W, H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.07f, 0.07f, 0.10f, 1.f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
+    ImGui::Begin("##auth_bg", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoMove   |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+
+    // ── Card window ───────────────────────────────────────────────────────────
+    const float cw   = 400.f;
+    const float padX = 36.f, padY = 32.f;
+    float baseH = isSignup ? 518.f : 444.f;
+    if (m_authError[0] && strchr(m_authError, '\n')) baseH += 20.f;
+    const float ch = baseH;
+
+    ImGui::SetNextWindowPos({(W - cw) * 0.5f, (H - ch) * 0.5f});
+    ImGui::SetNextWindowSize({cw, ch});
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,       {0.044f, 0.044f, 0.068f, 0.99f});
+    ImGui::PushStyleColor(ImGuiCol_Border,         {0.14f,  0.14f,  0.22f,  1.f  });
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,        {0.09f,  0.09f,  0.14f,  1.f  });
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, {0.12f,  0.12f,  0.18f,  1.f  });
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  {0.07f,  0.07f,  0.11f,  1.f  });
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,  14.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   {padX, padY});
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,    8.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,    {14.f, 10.f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,     {0.f, 10.f});
+
+    ImGui::Begin("##auth_card", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoSavedSettings);
+
+    float innerW = ImGui::GetContentRegionAvail().x;
+
+    // ── C2P logo pill ─────────────────────────────────────────────────────────
+    {
+        const char* mono = "C2P";
+        ImVec2 tsz = ImGui::CalcTextSize(mono);
+        float lx = (innerW - tsz.x - 14.f) * 0.5f;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 cur = ImGui::GetCursorScreenPos(); cur.x += lx;
+        dl->AddRectFilled({cur.x - 7.f, cur.y - 4.f},
+                          {cur.x + tsz.x + 7.f, cur.y + tsz.y + 4.f},
+                          IM_COL32(28, 92, 240, 210), 7.f);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + lx);
+        ImGui::TextColored({1.f, 1.f, 1.f, 1.f}, "%s", mono);
+    }
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.f);
+
+    // ── Title + subtitle ──────────────────────────────────────────────────────
+    ImGui::PushFont(m_fontTitle);
+    {
+        const char* t = isSignup ? "Create account" : "Welcome back";
+        ImGui::SetCursorPosX((innerW - ImGui::CalcTextSize(t).x) * 0.5f);
+        ImGui::TextColored({1.f, 1.f, 1.f, 0.95f}, "%s", t);
+    }
+    ImGui::PopFont();
+    {
+        const char* s = isSignup ? "Join CreateToPlay" : "Sign in to CreateToPlay";
+        ImGui::SetCursorPosX((innerW - ImGui::CalcTextSize(s).x) * 0.5f);
+        ImGui::TextColored({0.46f, 0.46f, 0.58f, 1.f}, "%s", s);
+    }
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 14.f);
+
+    // ── Form fields (disabled while request in flight) ────────────────────────
+    const bool busy = m_authInFlight;
+    if (busy) ImGui::BeginDisabled();
+
+    ImGui::TextColored({0.60f, 0.60f, 0.72f, 1.f}, "Username");
+    ImGui::SetNextItemWidth(innerW);
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    bool enterUser = ImGui::InputText("##authuser", m_inputUser, sizeof(m_inputUser),
+        ImGuiInputTextFlags_EnterReturnsTrue);
+
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.f);
+    ImGui::TextColored({0.60f, 0.60f, 0.72f, 1.f}, "Password");
+    ImGui::SetNextItemWidth(innerW);
+    bool enterPass = ImGui::InputText("##authpass", m_inputPass, sizeof(m_inputPass),
+        ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+
+    bool enterConfirm = false;
+    if (isSignup) {
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.f);
+        ImGui::TextColored({0.60f, 0.60f, 0.72f, 1.f}, "Confirm password");
+        ImGui::SetNextItemWidth(innerW);
+        enterConfirm = ImGui::InputText("##authconfirm", m_inputPassConfirm,
+            sizeof(m_inputPassConfirm),
+            ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+    }
+
+    if (busy) ImGui::EndDisabled();
+
+    // ── Error / connecting feedback ───────────────────────────────────────────
+    if (busy) {
+        // Animated dots: "Connecting." / ".." / "..."
+        static const char* kDots[] = {"Connecting.  ", "Connecting.. ", "Connecting..."};
+        int tick = (int)(ImGui::GetTime() * 2.0) % 3;
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.f);
+        float tw = ImGui::CalcTextSize(kDots[tick]).x;
+        ImGui::SetCursorPosX((innerW - tw) * 0.5f);
+        ImGui::TextColored({0.50f, 0.70f, 1.f, 1.f}, "%s", kDots[tick]);
+    } else if (m_authError[0]) {
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.f);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + innerW);
+        ImGui::TextColored({0.95f, 0.35f, 0.35f, 1.f}, "%s", m_authError);
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 12.f);
+
+    // ── Primary button ────────────────────────────────────────────────────────
+    bool doSubmit = !busy && (enterUser || enterPass || enterConfirm);
+
+    if (busy) ImGui::BeginDisabled();
+    ImGui::PushStyleColor(ImGuiCol_Button,        {0.11f, 0.36f, 0.94f, 1.f});
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.22f, 0.48f, 1.00f, 1.f});
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.07f, 0.26f, 0.80f, 1.f});
+    if (ImGui::Button(isSignup ? "Create Account" : "Log In", {innerW, 46.f}))
+        doSubmit = true;
+    ImGui::PopStyleColor(3);
+    if (busy) ImGui::EndDisabled();
+
+    // ── Submit: launch async auth ─────────────────────────────────────────────
+    if (doSubmit && !busy) {
+        m_authError[0] = '\0';
+        if (isSignup && strcmp(m_inputPass, m_inputPassConfirm) != 0) {
+            snprintf(m_authError, sizeof(m_authError), "Passwords do not match");
+        } else {
+            m_pendingUser  = m_inputUser;
+            m_authInFlight = true;
+
+            // Capture by value so the lambda is self-contained in its thread
+            std::string host = m_authHost;
+            uint16_t    port = m_authPort;
+            std::string user = m_inputUser;
+            std::string pass = m_inputPass;
+            bool        reg  = isSignup;
+
+            m_authFuture = std::async(std::launch::async,
+                [host, port, user, pass, reg]() -> AuthResult {
+                    AuthClient ac;
+                    return reg ? ac.Register(host, port, user, pass)
+                               : ac.Login   (host, port, user, pass);
+                });
+        }
+    }
+
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.f);
+
+    // ── Divider ───────────────────────────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Separator, {0.18f, 0.18f, 0.28f, 1.f});
+    ImGui::Separator();
+    ImGui::PopStyleColor();
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.f);
+
+    // ── Switch-mode link + Guest shortcut ─────────────────────────────────────
+    auto LinkButton = [&](const char* lbl) -> bool {
+        float lw = ImGui::CalcTextSize(lbl).x;
+        ImGui::SetCursorPosX((innerW - lw) * 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.f,0.f,0.f,0.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.f,0.f,0.f,0.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.f,0.f,0.f,0.f});
+        ImGui::PushStyleColor(ImGuiCol_Text,          {0.44f,0.64f,1.f,1.f});
+        bool clicked = ImGui::Button(lbl);
+        ImGui::PopStyleColor(4);
+        return clicked;
+    };
+
+    const char* switchLbl = isSignup
+        ? "Already have an account?  Log in"
+        : "Don't have an account?  Sign up";
+    if (LinkButton(switchLbl)) {
+        m_authState    = isSignup ? AuthState::Login : AuthState::Signup;
+        m_authError[0] = '\0';
+    }
+
+    // Guest option — skips server auth entirely
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.f);
+    if (LinkButton("Continue as Guest")) {
+        // Generate a guest name from the clock so multiple guests don't collide
+        char guestName[24];
+        snprintf(guestName, sizeof(guestName), "Guest_%u",
+            (unsigned)(SDL_GetTicks() % 9999));
+        m_loggedIn = true;
+        m_username  = guestName;
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(6);
+    ImGui::PopStyleColor(5);
 }

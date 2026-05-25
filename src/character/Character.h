@@ -7,11 +7,19 @@ class PhysicsWorld;
 class BasePart;
 class btRigidBody;
 
+// Skin = head + arms color, Shirt = torso color, Pants = legs color.
+struct AvatarConfig {
+    glm::vec3 skin  = {0.976f, 0.820f, 0.173f}; // noob yellow
+    glm::vec3 shirt = {0.059f, 0.420f, 0.690f}; // noob blue
+    glm::vec3 pants = {0.110f, 0.529f, 0.047f}; // noob green
+};
+
 class Character {
 public:
     void Init(Workspace& workspace, PhysicsWorld& physics, const glm::vec3& spawnPos);
 
     void SyncVisuals();
+    void SetAvatar(const AvatarConfig& cfg);
 
     glm::vec3    GetPosition() const;
     btRigidBody* GetBody()     const { return m_capsuleBody; }

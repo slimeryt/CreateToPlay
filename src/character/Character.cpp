@@ -57,6 +57,16 @@ glm::vec3 Character::GetPosition() const {
     return BtToGlm(t.getOrigin());
 }
 
+void Character::SetAvatar(const AvatarConfig& cfg) {
+    // 0=torso(shirt), 1=head(skin), 2=armL(skin), 3=armR(skin), 4=legL(pants), 5=legR(pants)
+    if (m_visualParts[0]) m_visualParts[0]->color = cfg.shirt;
+    if (m_visualParts[1]) m_visualParts[1]->color = cfg.skin;
+    if (m_visualParts[2]) m_visualParts[2]->color = cfg.skin;
+    if (m_visualParts[3]) m_visualParts[3]->color = cfg.skin;
+    if (m_visualParts[4]) m_visualParts[4]->color = cfg.pants;
+    if (m_visualParts[5]) m_visualParts[5]->color = cfg.pants;
+}
+
 void Character::SyncVisuals() {
     glm::vec3 capsulePos = GetPosition();
     glm::quat facingRot  = glm::angleAxis(m_facingYaw, glm::vec3(0, 1, 0));

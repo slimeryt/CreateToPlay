@@ -89,9 +89,13 @@ bool NetClient::Connect(const std::string& host, uint16_t port) {
     SockNonBlock(s);
     m_sock = s;
 
-    // Send JOIN
+    // Send JOIN with actual name + avatar colours
     PktJoin pkt;
-    std::strncpy(pkt.name, "Player", sizeof(pkt.name) - 1);
+    std::strncpy(pkt.name, m_localName.c_str(), sizeof(pkt.name) - 1);
+    auto F2B = [](float f) -> uint8_t { return (uint8_t)(f * 255.f + 0.5f); };
+    pkt.skinR  = F2B(m_localSkin.r);  pkt.skinG  = F2B(m_localSkin.g);  pkt.skinB  = F2B(m_localSkin.b);
+    pkt.shirtR = F2B(m_localShirt.r); pkt.shirtG = F2B(m_localShirt.g); pkt.shirtB = F2B(m_localShirt.b);
+    pkt.pantsR = F2B(m_localPants.r); pkt.pantsG = F2B(m_localPants.g); pkt.pantsB = F2B(m_localPants.b);
     if (!SendRaw(&pkt, sizeof(pkt))) {
         Disconnect();
         return false;
@@ -184,6 +188,7 @@ void NetClient::ProcessPayload(const uint8_t* buf, int len) {
 
         for (auto& r : m_remote) r.active = false;
 
+        auto B2F = [](uint8_t b) -> float { return b / 255.f; };
         for (int i = 0; i < count; ++i) {
             const RemoteState& s = snap->players[i];
             if (s.id == m_myId)            continue;
@@ -193,6 +198,9 @@ void NetClient::ProcessPayload(const uint8_t* buf, int len) {
             r.id     = s.id;
             r.pos    = {s.x, s.y, s.z};
             r.yaw    = s.yaw;
+            r.skin   = {B2F(s.skinR),  B2F(s.skinG),  B2F(s.skinB)};
+            r.shirt  = {B2F(s.shirtR), B2F(s.shirtG), B2F(s.shirtB)};
+            r.pants  = {B2F(s.pantsR), B2F(s.pantsG), B2F(s.pantsB)};
         }
     }
 }

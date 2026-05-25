@@ -1,5 +1,6 @@
 #include "Engine.h"
 #include "embedded/EmbeddedAssets.h"
+#include "character/Character.h"
 #include <SDL.h>
 #include <glad/glad.h>
 #include <btBulletDynamicsCommon.h>
@@ -125,6 +126,14 @@ void Engine::Run() {
                     host = serverAddr.substr(0, colon);
                     port = (uint16_t)std::stoi(serverAddr.substr(colon + 1));
                 }
+                // Push name + avatar colours so they're included in PKT_JOIN
+                m_netClient.SetLocalName(m_coreGui.GetUsername());
+                {
+                    const float* s  = m_coreGui.GetAvatarSkin();
+                    const float* sh = m_coreGui.GetAvatarShirt();
+                    const float* pa = m_coreGui.GetAvatarPants();
+                    m_netClient.SetLocalAvatar({s[0],s[1],s[2]}, {sh[0],sh[1],sh[2]}, {pa[0],pa[1],pa[2]});
+                }
                 printf("[Engine] Connecting to server: %s:%u\n", host.c_str(), port);
                 m_netClient.Connect(host, port);
             } else {
@@ -179,6 +188,19 @@ void Engine::ProcessEvents() {
 }
 
 void Engine::FixedUpdate(float dt) {
+    // Apply avatar colours to local character whenever they change
+    if (m_coreGui.IsAvatarDirty()) {
+        const float* s  = m_coreGui.GetAvatarSkin();
+        const float* sh = m_coreGui.GetAvatarShirt();
+        const float* pa = m_coreGui.GetAvatarPants();
+        AvatarConfig cfg;
+        cfg.skin  = {s[0],  s[1],  s[2]};
+        cfg.shirt = {sh[0], sh[1], sh[2]};
+        cfg.pants = {pa[0], pa[1], pa[2]};
+        m_character.SetAvatar(cfg);
+        m_coreGui.ClearAvatarDirty();
+    }
+
     if (m_coreGui.WantsReset()) {
         btRigidBody* body = m_character.GetBody();
         btTransform t;
@@ -217,42 +239,41 @@ void Engine::Render() {
     // ── Shadow pass ───────────────────────────────────────────────────────────
     m_renderer.BeginShadowPass();
     m_workspace.RenderAll(m_renderer);
-    // Shadow ghosts
+    // Shadow pass — remote players (colour unused in shadow shader)
     for (const auto& r : m_netClient.GetRemotePlayers()) {
         if (!r.active) continue;
-        // Torso
-        m_renderer.DrawBox(r.pos + glm::vec3(0.f, 0.75f, 0.f),
-                           {1.0f, 1.5f, 0.6f}, {}, r.yaw);
-        // Head
-        m_renderer.DrawBox(r.pos + glm::vec3(0.f, 1.9f, 0.f),
-                           {0.8f, 0.8f, 0.8f}, {}, r.yaw);
+        m_renderer.DrawBox(r.pos + glm::vec3(0.f,    0.14f,  0.f), {1.40f,1.40f,0.70f}, {}, r.yaw);
+        m_renderer.DrawBox(r.pos + glm::vec3(0.f,    1.51f,  0.f), {1.20f,1.20f,1.20f}, {}, r.yaw);
+        m_renderer.DrawBox(r.pos + glm::vec3(-1.12f, 0.14f,  0.f), {0.70f,1.40f,0.70f}, {}, r.yaw);
+        m_renderer.DrawBox(r.pos + glm::vec3( 1.12f, 0.14f,  0.f), {0.70f,1.40f,0.70f}, {}, r.yaw);
+        m_renderer.DrawBox(r.pos + glm::vec3(-0.385f,-1.33f, 0.f), {0.63f,1.40f,0.70f}, {}, r.yaw);
+        m_renderer.DrawBox(r.pos + glm::vec3( 0.385f,-1.33f, 0.f), {0.63f,1.40f,0.70f}, {}, r.yaw);
     }
 
     // ── Main pass ─────────────────────────────────────────────────────────────
     m_renderer.BeginMainPass(m_camera);
     m_workspace.RenderAll(m_renderer);
-    // Render remote players as ghost humanoids (distinct cyan tint)
+    // Render remote players with their chosen avatar colours
     for (const auto& r : m_netClient.GetRemotePlayers()) {
         if (!r.active) continue;
-        glm::vec3 ghostColor = {0.30f, 0.70f, 0.95f};
-        // Torso
-        m_renderer.DrawBox(r.pos + glm::vec3(0.f, 0.75f, 0.f),
-                           {1.0f, 1.5f, 0.6f}, ghostColor, r.yaw);
-        // Head
-        m_renderer.DrawBox(r.pos + glm::vec3(0.f, 1.9f, 0.f),
-                           {0.8f, 0.8f, 0.8f}, ghostColor * 0.85f, r.yaw);
-        // Left arm
-        m_renderer.DrawBox(r.pos + glm::vec3(-0.75f, 0.6f, 0.f),
-                           {0.5f, 1.2f, 0.5f}, ghostColor * 0.90f, r.yaw);
-        // Right arm
-        m_renderer.DrawBox(r.pos + glm::vec3( 0.75f, 0.6f, 0.f),
-                           {0.5f, 1.2f, 0.5f}, ghostColor * 0.90f, r.yaw);
-        // Left leg
-        m_renderer.DrawBox(r.pos + glm::vec3(-0.28f, -0.55f, 0.f),
-                           {0.46f, 1.1f, 0.5f}, ghostColor * 0.80f, r.yaw);
-        // Right leg
-        m_renderer.DrawBox(r.pos + glm::vec3( 0.28f, -0.55f, 0.f),
-                           {0.46f, 1.1f, 0.5f}, ghostColor * 0.80f, r.yaw);
+        // Torso (shirt)
+        m_renderer.DrawBox(r.pos + glm::vec3(0.f,    0.14f,  0.f),
+                           {1.40f, 1.40f, 0.70f}, r.shirt, r.yaw);
+        // Head (skin)
+        m_renderer.DrawBox(r.pos + glm::vec3(0.f,    1.51f,  0.f),
+                           {1.20f, 1.20f, 1.20f}, r.skin,  r.yaw);
+        // Left arm (skin)
+        m_renderer.DrawBox(r.pos + glm::vec3(-1.12f, 0.14f,  0.f),
+                           {0.70f, 1.40f, 0.70f}, r.skin,  r.yaw);
+        // Right arm (skin)
+        m_renderer.DrawBox(r.pos + glm::vec3( 1.12f, 0.14f,  0.f),
+                           {0.70f, 1.40f, 0.70f}, r.skin,  r.yaw);
+        // Left leg (pants)
+        m_renderer.DrawBox(r.pos + glm::vec3(-0.385f,-1.33f, 0.f),
+                           {0.63f, 1.40f, 0.70f}, r.pants, r.yaw);
+        // Right leg (pants)
+        m_renderer.DrawBox(r.pos + glm::vec3( 0.385f,-1.33f, 0.f),
+                           {0.63f, 1.40f, 0.70f}, r.pants, r.yaw);
     }
 
     // ── Post-process ──────────────────────────────────────────────────────────
