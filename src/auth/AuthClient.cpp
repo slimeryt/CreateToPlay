@@ -142,14 +142,20 @@ AuthResult AuthClient::Send(uint8_t type,
     if (payBuf[0] == PKT_AUTH_OK)
         return {true, ""};
 
-    if (payBuf[0] == PKT_AUTH_FAIL && payloadLen >= (int)sizeof(PktAuthFail)) {
-        const auto* f = reinterpret_cast<const PktAuthFail*>(payBuf);
-        char reason[sizeof(f->reason) + 1] = {};
-        std::strncpy(reason, f->reason, sizeof(f->reason));
-        return {false, std::string(reason)};
+    if (payBuf[0] == PKT_AUTH_FAIL) {
+        // Parse reason if payload is large enough to contain it
+        if (payloadLen >= (int)sizeof(PktAuthFail)) {
+            const auto* f = reinterpret_cast<const PktAuthFail*>(payBuf);
+            char reason[sizeof(f->reason) + 1] = {};
+            std::strncpy(reason, f->reason, sizeof(f->reason));
+            return {false, std::string(reason)};
+        }
+        return {false, "Login failed"};
     }
 
-    return {false, "Unknown response from server"};
+    char dbg[64];
+    snprintf(dbg, sizeof(dbg), "Unknown response from server (type=%u)", (unsigned)payBuf[0]);
+    return {false, std::string(dbg)};
 }
 
 AuthResult AuthClient::Login(const std::string& host, uint16_t port,

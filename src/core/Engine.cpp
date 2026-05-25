@@ -141,8 +141,8 @@ void Engine::Run() {
             }
         }
 
-        // ── Game simulation ───────────────────────────────────────────────────
-        if (m_coreGui.GameStarted() && !m_coreGui.IsMenuOpen()) {
+        // ── Game simulation (runs even while menu is open) ───────────────────
+        if (m_coreGui.GameStarted()) {
             accum += frame;
             while (accum >= kFixedDt) {
                 FixedUpdate(kFixedDt);

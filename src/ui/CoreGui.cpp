@@ -64,6 +64,41 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
             m_authHost = serverAddr;
         }
     }
+
+    // Session — auto-login if session.dat exists from a previous run
+    {
+        char* pref = SDL_GetPrefPath("CreateToPlay", "Game");
+        if (pref) {
+            m_sessionPath = std::string(pref) + "session.dat";
+            SDL_free(pref);
+            if (FILE* f = fopen(m_sessionPath.c_str(), "r")) {
+                char line[32] = {};
+                if (fgets(line, sizeof(line), f) && line[0]) {
+                    for (char* p = line; *p; ++p)
+                        if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+                    if (line[0]) {
+                        m_username  = line;
+                        m_loggedIn  = true;
+                    }
+                }
+                fclose(f);
+            }
+        }
+    }
+}
+
+void CoreGui::SaveSession() {
+    if (m_sessionPath.empty()) return;
+    if (FILE* f = fopen(m_sessionPath.c_str(), "w")) {
+        fprintf(f, "%s\n", m_username.c_str());
+        fclose(f);
+    }
+}
+
+void CoreGui::ClearSession() {
+    m_loggedIn  = false;
+    m_username.clear();
+    if (!m_sessionPath.empty()) remove(m_sessionPath.c_str());
 }
 
 void CoreGui::Shutdown() {
@@ -461,37 +496,46 @@ void CoreGui::DrawHomePage() {
         ImGui::PopStyleColor();
     }
 
-    // ── Username chip at the bottom of the sidebar ───────────────────────────
+    // ── Username chip + sign-out at the bottom of the sidebar ────────────────
     {
         const float chipH  = 44.f;
         const float chipY  = H - chipH - 10.f;
         const float chipX  = 6.f;
         const float chipW  = sideW - 12.f;
 
-        // Background pill
-        dl->AddRectFilled({chipX, chipY}, {chipX + chipW, chipY + chipH},
-            IM_COL32(20, 20, 32, 200), 8.f);
-        dl->AddRect({chipX, chipY}, {chipX + chipW, chipY + chipH},
-            IM_COL32(50, 50, 80, 140), 8.f, 0, 1.f);
+        ImGui::SetCursorPos({chipX, chipY});
+        bool chipHov = ImGui::InvisibleButton("##signout", {chipW, chipH});
+
+        // Background pill — red tint on hover to hint sign-out
+        bool hov = ImGui::IsItemHovered();
+        ImU32 bgCol = hov ? IM_COL32(50, 14, 14, 220) : IM_COL32(20, 20, 32, 200);
+        ImU32 brCol = hov ? IM_COL32(160, 40, 40, 180) : IM_COL32(50, 50, 80, 140);
+        dl->AddRectFilled({chipX, chipY}, {chipX + chipW, chipY + chipH}, bgCol, 8.f);
+        dl->AddRect({chipX, chipY}, {chipX + chipW, chipY + chipH}, brCol, 8.f, 0, 1.f);
 
         // Avatar circle
         float cx2 = chipX + 18.f;
         float cy2 = chipY + chipH * 0.5f;
-        dl->AddCircleFilled({cx2, cy2}, 11.f, IM_COL32(28, 92, 240, 200));
-        // First-letter initial
+        dl->AddCircleFilled({cx2, cy2}, 11.f,
+            hov ? IM_COL32(200, 60, 60, 220) : IM_COL32(28, 92, 240, 200));
         char init[2] = { (char)toupper((unsigned char)m_username[0]), '\0' };
         ImVec2 itsz = ImGui::CalcTextSize(init);
         dl->AddText({cx2 - itsz.x * 0.5f, cy2 - itsz.y * 0.5f},
             IM_COL32(255, 255, 255, 255), init);
 
-        // Name (truncated to fit)
-        std::string display = m_username;
-        if (display.size() > 8) display = display.substr(0, 7) + ".";
+        // Name or "Sign out" hint
+        const char* nameStr = hov ? "Sign out" : m_username.c_str();
+        // truncate if needed
+        std::string display = nameStr;
+        if (!hov && display.size() > 8) display = display.substr(0, 7) + ".";
         float nw = ImGui::CalcTextSize(display.c_str()).x;
         float nx = cx2 + 14.f;
+        ImU32 textCol = hov ? IM_COL32(255, 100, 100, 255) : IM_COL32(200, 200, 220, 255);
         if (nx + nw < chipX + chipW - 4.f)
             dl->AddText({nx, cy2 - ImGui::GetTextLineHeight() * 0.5f},
-                IM_COL32(200, 200, 220, 255), display.c_str());
+                textCol, display.c_str());
+
+        if (chipHov) ClearSession();  // click = sign out
     }
 
     // ── Content area ──────────────────────────────────────────────────────────
@@ -800,6 +844,7 @@ void CoreGui::DrawAuthScreen() {
             if (res.ok) {
                 m_loggedIn = true;
                 m_username = m_pendingUser;
+                SaveSession();   // persist so next launch auto-logs in
                 memset(m_inputUser,        0, sizeof(m_inputUser));
                 memset(m_inputPass,        0, sizeof(m_inputPass));
                 memset(m_inputPassConfirm, 0, sizeof(m_inputPassConfirm));
@@ -997,12 +1042,12 @@ void CoreGui::DrawAuthScreen() {
     // Guest option — skips server auth entirely
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.f);
     if (LinkButton("Continue as Guest")) {
-        // Generate a guest name from the clock so multiple guests don't collide
         char guestName[24];
         snprintf(guestName, sizeof(guestName), "Guest_%u",
             (unsigned)(SDL_GetTicks() % 9999));
         m_loggedIn = true;
         m_username  = guestName;
+        SaveSession();
     }
 
     ImGui::End();

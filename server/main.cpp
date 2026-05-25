@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cctype>
 #include <string>
 #include <vector>
 #include <array>
@@ -145,7 +146,9 @@ static void ProcessPayload(int i, const uint8_t* buf, int len) {
         char username[25] = {};
         strncpy(username, req->username, 24);
 
-        PktAuthFail fail{};
+        PktAuthFail fail;
+        memset(&fail, 0, sizeof(fail));
+        fail.type = PKT_AUTH_FAIL;
         if (!ValidUsername(username)) {
             strncpy(fail.reason, "Username: 3-20 chars (letters/numbers/_)", sizeof(fail.reason)-1);
             c.SendRaw(&fail, sizeof(fail));
@@ -159,7 +162,8 @@ static void ProcessPayload(int i, const uint8_t* buf, int len) {
                 c.SendRaw(&fail, sizeof(fail));
             } else {
                 AppendAccount(username, req->passHash);
-                PktAuthOk ok{};
+                PktAuthOk ok;
+                ok.type = PKT_AUTH_OK;
                 c.SendRaw(&ok, sizeof(ok));
                 printf("[Server] Registered: %s\n", username);
             }
@@ -175,13 +179,16 @@ static void ProcessPayload(int i, const uint8_t* buf, int len) {
         char username[25] = {};
         strncpy(username, req->username, 24);
 
-        PktAuthFail fail{};
+        PktAuthFail fail;
+        memset(&fail, 0, sizeof(fail));
+        fail.type = PKT_AUTH_FAIL;
         bool found = false;
         for (const auto& a : g_accounts) {
             if (strcmp(a.name, username) == 0) {
                 found = true;
                 if (a.hash == req->passHash) {
-                    PktAuthOk ok{};
+                    PktAuthOk ok;
+                    ok.type = PKT_AUTH_OK;
                     c.SendRaw(&ok, sizeof(ok));
                     printf("[Server] Login OK: %s\n", username);
                 } else {

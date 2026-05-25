@@ -76,6 +76,10 @@ private:
     // Auth — server address (read from server.txt / embedded constant in Init)
     std::string m_authHost;
     uint16_t    m_authPort = 7777;
+    std::string m_sessionPath;   // path to session.dat (written on login, deleted on logout)
+
+    void SaveSession();
+    void ClearSession();
 
     // Async auth state
     enum class AuthState { Login, Signup };
