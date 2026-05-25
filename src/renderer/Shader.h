@@ -6,6 +6,7 @@
 class Shader {
 public:
     bool Load(const std::string& vertPath, const std::string& fragPath);
+    bool LoadFromSource(const char* vertSrc, const char* fragSrc);
     void Use() const;
     void Shutdown();
 
@@ -18,6 +19,6 @@ public:
 private:
     GLuint m_id = 0;
 
-    static GLuint CompileStage(GLenum type, const std::string& src);
+    static GLuint CompileStage(GLenum type, const char* src);
     static std::string ReadFile(const std::string& path);
 };

@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "embedded/EmbeddedAssets.h"
 #include <SDL.h>
 #include <glad/glad.h>
 #include <btBulletDynamicsCommon.h>
@@ -10,11 +11,8 @@ bool Engine::Init() {
     // 1. Window
     if (!m_window.Init("CreateToPlay", 1280, 720)) return false;
 
-    // 2. Renderer — resolve shader path via SDL_GetBasePath
-    char* base = SDL_GetBasePath();
-    std::string shaderDir = std::string(base) + "assets/shaders";
-    SDL_free(base);
-    if (!m_renderer.Init(shaderDir)) return false;
+    // 2. Renderer — uses embedded shaders, no file I/O
+    if (!m_renderer.Init()) return false;
 
     // 4. Physics
     m_physics.Init();
@@ -114,6 +112,10 @@ void Engine::Run() {
                 }
                 fclose(f);
             }
+
+            // Fall back to compiled-in address if no file found
+            if (serverAddr.empty())
+                serverAddr = kEmbeddedServerAddr;
 
             if (!serverAddr.empty()) {
                 std::string host = serverAddr;
@@ -255,6 +257,12 @@ void Engine::Render() {
 
     // ── Post-process ──────────────────────────────────────────────────────────
     m_renderer.EndFrame();
+
+    // Count active remote players for HUD
+    int remotePlayers = 0;
+    for (const auto& r : m_netClient.GetRemotePlayers())
+        if (r.active) ++remotePlayers;
+    m_coreGui.SetConnected(m_netClient.IsConnected(), 1 + remotePlayers);
 
     m_coreGui.BeginFrame();
     m_coreGui.Render();

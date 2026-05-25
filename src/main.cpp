@@ -1,11 +1,11 @@
-#define SDL_MAIN_HANDLED
 #include <SDL.h>
 #include "core/Engine.h"
 
+// SDL renames main → SDL_main; SDL2main.lib provides WinMain that calls it.
+// This keeps the exe windowless (no console) on Windows.
 int main(int argc, char* argv[]) {
-    SDL_SetMainReady();
     Engine engine;
-    engine.Init();
+    if (!engine.Init()) return 1;
     engine.Run();
     engine.Shutdown();
     return 0;

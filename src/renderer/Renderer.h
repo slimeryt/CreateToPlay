@@ -10,7 +10,7 @@ class Camera;
 
 class Renderer {
 public:
-    bool Init(const std::string& shaderDir);
+    bool Init();
     void Shutdown();
     void Resize(int w, int h);
 

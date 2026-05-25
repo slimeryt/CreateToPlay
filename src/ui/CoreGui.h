@@ -29,6 +29,11 @@ public:
     bool WantsReset()    const { return m_wantsReset; }
     void ClearReset()          { m_wantsReset = false; }
 
+    void SetConnected(bool connected, int playerCount = 0) {
+        m_connected   = connected;
+        m_playerCount = playerCount;
+    }
+
 private:
     void DrawMenuButton();
     void DrawEscapeMenu();
@@ -44,5 +49,6 @@ private:
     bool m_wantsQuit           = false;
     bool m_wantsReset          = false;
     bool m_skipEscapeThisFrame = false;
-
+    bool m_connected           = false;
+    int  m_playerCount         = 0;
 };

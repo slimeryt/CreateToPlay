@@ -1,6 +1,7 @@
 #include "Renderer.h"
 #include "scene/BasePart.h"
 #include "camera/Camera.h"
+#include "embedded/EmbeddedAssets.h"
 #include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -15,12 +16,12 @@ static const glm::vec3 kFogColor    = glm::vec3(0.53f, 0.81f, 0.98f);
 static constexpr float kFogDensity  = 0.006f;
 
 // ── Init / Shutdown ───────────────────────────────────────────────────────────
-bool Renderer::Init(const std::string& shaderDir) {
-    if (!m_phongShader.Load(       shaderDir + "/phong.vert",         shaderDir + "/phong.frag"))         return false;
-    if (!m_shadowShader.Load(      shaderDir + "/shadow.vert",        shaderDir + "/shadow.frag"))        return false;
-    if (!m_bloomExtractShader.Load(shaderDir + "/quad.vert",          shaderDir + "/bloom_extract.frag")) return false;
-    if (!m_blurShader.Load(        shaderDir + "/quad.vert",          shaderDir + "/blur.frag"))          return false;
-    if (!m_compositeShader.Load(   shaderDir + "/quad.vert",          shaderDir + "/composite.frag"))     return false;
+bool Renderer::Init() {
+    if (!m_phongShader.LoadFromSource(       kPhongVert,  kPhongFrag))         return false;
+    if (!m_shadowShader.LoadFromSource(      kShadowVert, kShadowFrag))        return false;
+    if (!m_bloomExtractShader.LoadFromSource(kQuadVert,   kBloomExtractFrag))  return false;
+    if (!m_blurShader.LoadFromSource(        kQuadVert,   kBlurFrag))          return false;
+    if (!m_compositeShader.LoadFromSource(   kQuadVert,   kCompositeFrag))     return false;
 
     m_cube.Init();
     CreateShadowMap();

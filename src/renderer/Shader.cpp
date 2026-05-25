@@ -15,9 +15,9 @@ std::string Shader::ReadFile(const std::string& path) {
     return ss.str();
 }
 
-GLuint Shader::CompileStage(GLenum type, const std::string& src) {
+GLuint Shader::CompileStage(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
-    const char* c = src.c_str();
+    const char* c = src;
     glShaderSource(s, 1, &c, nullptr);
     glCompileShader(s);
 
@@ -31,13 +31,34 @@ GLuint Shader::CompileStage(GLenum type, const std::string& src) {
     return s;
 }
 
+bool Shader::LoadFromSource(const char* vertSrc, const char* fragSrc) {
+    GLuint v = CompileStage(GL_VERTEX_SHADER,   vertSrc);
+    GLuint f = CompileStage(GL_FRAGMENT_SHADER, fragSrc);
+
+    m_id = glCreateProgram();
+    glAttachShader(m_id, v);
+    glAttachShader(m_id, f);
+    glLinkProgram(m_id);
+
+    GLint ok;
+    glGetProgramiv(m_id, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[1024];
+        glGetProgramInfoLog(m_id, sizeof(log), nullptr, log);
+        printf("Shader link error:\n%s\n", log);
+    }
+    glDeleteShader(v);
+    glDeleteShader(f);
+    return ok != 0;
+}
+
 bool Shader::Load(const std::string& vertPath, const std::string& fragPath) {
     std::string vs = ReadFile(vertPath);
     std::string fs = ReadFile(fragPath);
     if (vs.empty() || fs.empty()) return false;
 
-    GLuint v = CompileStage(GL_VERTEX_SHADER,   vs);
-    GLuint f = CompileStage(GL_FRAGMENT_SHADER, fs);
+    GLuint v = CompileStage(GL_VERTEX_SHADER,   vs.c_str());
+    GLuint f = CompileStage(GL_FRAGMENT_SHADER, fs.c_str());
 
     m_id = glCreateProgram();
     glAttachShader(m_id, v);

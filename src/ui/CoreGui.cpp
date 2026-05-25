@@ -1,4 +1,5 @@
 #include "CoreGui.h"
+#include "embedded/EmbeddedFont.h"
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
@@ -14,21 +15,19 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
 
-    char* base = SDL_GetBasePath();
-    std::string fontPath = std::string(base) + "assets/fonts/Roboto-Medium.ttf";
-    SDL_free(base);
-
     ImFontConfig cfg;
-    cfg.OversampleH = 3;
-    cfg.OversampleV = 3;
-    cfg.PixelSnapH  = false;
+    cfg.OversampleH          = 3;
+    cfg.OversampleV          = 3;
+    cfg.PixelSnapH           = false;
+    cfg.FontDataOwnedByAtlas = false;  // we keep ownership of the static array
 
-    // Body font — 17px, high oversample
-    if (!io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 17.f, &cfg))
-        io.Fonts->AddFontDefault();
+    // Body font — 17px from embedded TTF
+    io.Fonts->AddFontFromMemoryTTF(
+        (void*)kRobotoFontData, (int)kRobotoFontSize, 17.f, &cfg);
 
-    // Title font — 30px, same oversample; used instead of SetWindowFontScale
-    m_fontTitle = io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 30.f, &cfg);
+    // Title font — 30px
+    m_fontTitle = io.Fonts->AddFontFromMemoryTTF(
+        (void*)kRobotoFontData, (int)kRobotoFontSize, 30.f, &cfg);
     if (!m_fontTitle) m_fontTitle = io.Fonts->Fonts[0];
 
     ImGui::GetStyle().ScaleAllSizes(1.25f);
@@ -73,6 +72,63 @@ void CoreGui::Render() {
     }
 
     DrawMenuButton(); // always on top
+
+    // ── Connection status pill (top-right) ────────────────────────────────────
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        const char* label = m_connected ? "Online" : "Offline";
+        // Format label with player count when connected
+        char buf[32];
+        if (m_connected)
+            snprintf(buf, sizeof(buf), "Online  %d", m_playerCount);
+        else
+            snprintf(buf, sizeof(buf), "Offline");
+
+        ImVec2 tsz    = ImGui::CalcTextSize(buf);
+        float  dotR   = 5.f;
+        float  padX   = 10.f, padY = 6.f;
+        float  pillW  = dotR * 2.f + 6.f + tsz.x + padX * 2.f;
+        float  pillH  = tsz.y + padY * 2.f;
+        float  px     = io.DisplaySize.x - pillW - 12.f;
+        float  py     = 12.f;
+
+        ImGui::SetNextWindowPos({px, py});
+        ImGui::SetNextWindowSize({pillW, pillH});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
+        ImGui::Begin("##netstatus", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoMove   |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 wpos = ImGui::GetWindowPos();
+
+        // Pill background
+        ImU32 bgCol = m_connected ? IM_COL32(10, 28, 10, 200) : IM_COL32(20, 20, 20, 180);
+        dl->AddRectFilled(wpos, {wpos.x + pillW, wpos.y + pillH},
+            bgCol, pillH * 0.5f);
+        dl->AddRect(wpos, {wpos.x + pillW, wpos.y + pillH},
+            m_connected ? IM_COL32(40, 160, 40, 120) : IM_COL32(80, 80, 80, 100),
+            pillH * 0.5f, 0, 1.f);
+
+        // Dot
+        ImU32 dotCol = m_connected ? IM_COL32(60, 220, 80, 255) : IM_COL32(130, 130, 130, 255);
+        float dotCX  = wpos.x + padX + dotR;
+        float dotCY  = wpos.y + pillH * 0.5f;
+        dl->AddCircleFilled({dotCX, dotCY}, dotR, dotCol);
+
+        // Text
+        ImGui::SetCursorPos({padX + dotR * 2.f + 6.f, padY});
+        ImGui::TextColored(
+            m_connected ? ImVec4(0.7f, 1.f, 0.7f, 1.f) : ImVec4(0.6f, 0.6f, 0.6f, 1.f),
+            "%s", buf);
+
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+    }
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

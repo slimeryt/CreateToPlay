@@ -6,8 +6,8 @@ FetchContent_Declare(SDL2
     GIT_TAG        release-2.30.3
     GIT_SHALLOW    TRUE
 )
-set(SDL_SHARED ON  CACHE BOOL "" FORCE)
-set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON  CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(SDL2)
 
 # ── GLAD ──────────────────────────────────────────────────────────────────────

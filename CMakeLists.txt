@@ -7,7 +7,16 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 include(cmake/FetchDependencies.cmake)
 
-# ── ImGui static library (sources fetched above) ──────────────────────────────
+# ── Generate embedded font header (Roboto-Medium → C array) ──────────────────
+message(STATUS "Generating embedded font header from Roboto-Medium.ttf ...")
+file(READ "${imgui_SOURCE_DIR}/misc/fonts/Roboto-Medium.ttf" FONT_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," FONT_ARRAY "${FONT_HEX}")
+file(WRITE "${CMAKE_SOURCE_DIR}/src/embedded/EmbeddedFont.h"
+    "#pragma once\n#include <cstddef>\nstatic const unsigned char kRobotoFontData[] = {${FONT_ARRAY}};\nstatic const std::size_t kRobotoFontSize = sizeof(kRobotoFontData);\n"
+)
+message(STATUS "EmbeddedFont.h generated.")
+
+# ── ImGui static library ──────────────────────────────────────────────────────
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -22,10 +31,11 @@ target_include_directories(imgui PUBLIC
     ${CMAKE_BINARY_DIR}/_deps/glad-src/include
 )
 target_compile_definitions(imgui PRIVATE IMGUI_IMPL_OPENGL_LOADER_GLAD)
-target_link_libraries(imgui PUBLIC SDL2::SDL2 glad opengl32)
+target_link_libraries(imgui PUBLIC SDL2::SDL2-static glad opengl32)
 
+# ── Game client (standalone, no DLL needed) ───────────────────────────────────
 file(GLOB_RECURSE SOURCES "src/*.cpp")
-add_executable(RobloxScratch ${SOURCES})
+add_executable(RobloxScratch WIN32 ${SOURCES})
 
 target_include_directories(RobloxScratch PRIVATE
     src/
@@ -36,7 +46,7 @@ target_include_directories(RobloxScratch PRIVATE
 )
 
 target_link_libraries(RobloxScratch PRIVATE
-    SDL2::SDL2
+    SDL2::SDL2-static
     SDL2::SDL2main
     glad
     BulletDynamics
@@ -46,30 +56,15 @@ target_link_libraries(RobloxScratch PRIVATE
     imgui
 )
 
-# WinSock2 for networking on Windows
+# Windows: static SDL2 needs these system libs + WinSock2 for networking
 if(WIN32)
-    target_link_libraries(RobloxScratch PRIVATE ws2_32)
+    target_link_libraries(RobloxScratch PRIVATE
+        ws2_32 winmm imm32 version setupapi Cfgmgr32
+    )
 endif()
 
-# Copy SDL2.dll next to the exe
-add_custom_command(TARGET RobloxScratch POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:SDL2::SDL2>
-        $<TARGET_FILE_DIR:RobloxScratch>
-)
-
-# Copy assets folder next to the exe
-add_custom_command(TARGET RobloxScratch POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/assets
-        $<TARGET_FILE_DIR:RobloxScratch>/assets
-)
-
-# Copy Roboto font (bundled with ImGui) into assets/fonts/
-add_custom_command(TARGET RobloxScratch POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_FILE_DIR:RobloxScratch>/assets/fonts
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${imgui_SOURCE_DIR}/misc/fonts/Roboto-Medium.ttf"
-        $<TARGET_FILE_DIR:RobloxScratch>/assets/fonts/Roboto-Medium.ttf
-)
+# ── Game server (standalone TCP relay, Linux/Railway) ─────────────────────────
+if(UNIX)
+    add_executable(GameServer server/main.cpp)
+    target_include_directories(GameServer PRIVATE src/)
+endif()
