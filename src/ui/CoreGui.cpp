@@ -1,6 +1,7 @@
 #include "CoreGui.h"
 #include "embedded/EmbeddedFont.h"
 #include "embedded/EmbeddedAssets.h"
+#include "auth/FriendClient.h"
 #include <glad/glad.h>
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
@@ -79,6 +80,7 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
         if (pref) {
             m_sessionPath = std::string(pref) + "session.dat";
             m_avatarPath  = std::string(pref) + "avatar.dat";
+            LoadAppSettings();   // load app preferences
             SDL_free(pref);
 
             // Auto-login
@@ -97,6 +99,7 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
 
             // Restore saved avatar colours
             LoadAvatar();
+            LoadProfile();
         }
     }
 }
@@ -133,6 +136,133 @@ void CoreGui::LoadAvatar() {
         fscanf(f, "%f %f %f", &m_avatarPants[0], &m_avatarPants[1], &m_avatarPants[2]);
         fclose(f);
         m_avatarDirty = true;  // apply to character on next FixedUpdate
+    }
+}
+
+void CoreGui::SaveAppSettings() {
+    if (m_sessionPath.empty()) return;   // re-use same pref dir
+    std::string path = m_sessionPath.substr(0, m_sessionPath.rfind('/') + 1) + "settings.dat";
+    if (FILE* f = fopen(path.c_str(), "w")) {
+        fprintf(f, "accentR=%f\naccentG=%f\naccentB=%f\n",
+                m_appSettings.accentR, m_appSettings.accentG, m_appSettings.accentB);
+        fprintf(f, "uiScale=%f\n",    m_appSettings.uiScale);
+        fprintf(f, "nametags=%d\n",   m_appSettings.showNametags    ? 1 : 0);
+        fprintf(f, "online=%d\n",     m_appSettings.showOnlineStatus ? 1 : 0);
+        fclose(f);
+    }
+}
+
+void CoreGui::LoadAppSettings() {
+    if (m_sessionPath.empty()) return;
+    std::string path = m_sessionPath.substr(0, m_sessionPath.rfind('/') + 1) + "settings.dat";
+    if (FILE* f = fopen(path.c_str(), "r")) {
+        char key[32]; float fv; int iv;
+        char line[128];
+        while (fgets(line, sizeof(line), f)) {
+            if      (sscanf(line, "accentR=%f",  &fv) == 1) m_appSettings.accentR = fv;
+            else if (sscanf(line, "accentG=%f",  &fv) == 1) m_appSettings.accentG = fv;
+            else if (sscanf(line, "accentB=%f",  &fv) == 1) m_appSettings.accentB = fv;
+            else if (sscanf(line, "uiScale=%f",  &fv) == 1) m_appSettings.uiScale = fv;
+            else if (sscanf(line, "nametags=%d", &iv) == 1) m_appSettings.showNametags     = iv != 0;
+            else if (sscanf(line, "online=%d",   &iv) == 1) m_appSettings.showOnlineStatus = iv != 0;
+        }
+        fclose(f);
+    }
+}
+
+void CoreGui::SaveProfile() {
+    if (m_sessionPath.empty()) return;
+    std::string path = m_sessionPath.substr(0, m_sessionPath.rfind('/') + 1) + "profile.dat";
+    if (FILE* f = fopen(path.c_str(), "w")) {
+        fprintf(f, "displayName=%s\n", m_displayName.c_str());
+        fprintf(f, "email=%s\n",       m_email.c_str());
+        fprintf(f, "phone=%s\n",       m_phoneNumber.c_str());
+        fclose(f);
+    }
+}
+
+void CoreGui::LoadProfile() {
+    if (m_sessionPath.empty()) return;
+    std::string path = m_sessionPath.substr(0, m_sessionPath.rfind('/') + 1) + "profile.dat";
+    if (FILE* f = fopen(path.c_str(), "r")) {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            // Strip trailing CR/LF
+            for (char* p = line; *p; ++p)
+                if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+            if      (strncmp(line, "displayName=", 12) == 0) m_displayName = line + 12;
+            else if (strncmp(line, "email=",        6) == 0) m_email       = line + 6;
+            else if (strncmp(line, "phone=",        6) == 0) m_phoneNumber = line + 6;
+        }
+        fclose(f);
+    }
+}
+
+// ── Friend system helpers ─────────────────────────────────────────────────────
+
+void CoreGui::KickFriendRefresh() {
+    if (!m_loggedIn || m_authHost.empty()) return;
+    m_friendRefreshT = 15.f;   // next refresh in 15 s
+
+    if (!m_friendListInFlight) {
+        m_friendListInFlight = true;
+        std::string host = m_authHost; uint16_t port = m_authPort;
+        std::string user = m_username;
+        m_friendListFuture = std::async(std::launch::async,
+            [host, port, user]() -> FriendListResult {
+                return FriendClient().GetFriends(host, port, user);
+            });
+    }
+    if (!m_friendReqsInFlight) {
+        m_friendReqsInFlight = true;
+        std::string host = m_authHost; uint16_t port = m_authPort;
+        std::string user = m_username;
+        m_friendReqsFuture = std::async(std::launch::async,
+            [host, port, user]() -> FriendReqsResult {
+                return FriendClient().GetRequests(host, port, user);
+            });
+    }
+}
+
+void CoreGui::PollFriendFutures() {
+    // Friend list
+    if (m_friendListInFlight && m_friendListFuture.valid()) {
+        if (m_friendListFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            auto res = m_friendListFuture.get();
+            m_friendListInFlight = false;
+            if (res.ok) m_friends = std::move(res.friends);
+        }
+    }
+    // Friend requests
+    if (m_friendReqsInFlight && m_friendReqsFuture.valid()) {
+        if (m_friendReqsFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            auto res = m_friendReqsFuture.get();
+            m_friendReqsInFlight = false;
+            if (res.ok) m_friendRequests = std::move(res.requests);
+        }
+    }
+    // Generic op (add/accept/decline/remove)
+    if (m_friendOpInFlight && m_friendOpFuture.valid()) {
+        if (m_friendOpFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            auto res = m_friendOpFuture.get();
+            m_friendOpInFlight = false;
+            if (!res.ok) m_addFriendStatus = "Error: " + res.error;
+            else         m_addFriendStatus = "Sent!";
+        }
+    }
+    // Join friend
+    if (m_joinInFlight && m_joinFriendFuture.valid()) {
+        if (m_joinFriendFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            auto res = m_joinFriendFuture.get();
+            m_joinInFlight = false;
+            if (res.ok && !res.serverAddr.empty()) {
+                m_hasOverrideJoinAddr = true;
+                m_overrideJoinAddr    = res.serverAddr;
+                m_gameStarted         = true;   // trigger Engine game-start path
+            } else {
+                m_addFriendStatus = "Join failed: " + res.error;
+            }
+        }
     }
 }
 
@@ -392,7 +522,7 @@ void CoreGui::Render() {
     }
 
     // ── Nametags (drawn before HUD so HUD stays on top) ─────────────────────
-    if (!m_nametags.empty()) {
+    if (m_appSettings.showNametags && !m_nametags.empty()) {
         ImGuiIO& io = ImGui::GetIO();
         ImGui::SetNextWindowPos({0.f, 0.f});
         ImGui::SetNextWindowSize(io.DisplaySize);
@@ -433,10 +563,20 @@ void CoreGui::Render() {
         ImGui::PopStyleColor();
     }
 
+    // ── Shift-lock crosshair dot ──────────────────────────────────────────────
+    if (m_shiftLock && !m_menuOpen) {
+        ImDrawList* dl     = ImGui::GetForegroundDrawList();
+        ImVec2      center = ImGui::GetMainViewport()->GetCenter();
+        // Outer dark ring for contrast on any background
+        dl->AddCircle(center, 5.5f, IM_COL32(0, 0, 0, 160), 16, 1.8f);
+        // White filled dot
+        dl->AddCircleFilled(center, 3.0f, IM_COL32(255, 255, 255, 210), 16);
+    }
+
     DrawMenuButton(); // always on top
 
     // ── Connection status pill (top-right) ────────────────────────────────────
-    {
+    if (m_appSettings.showOnlineStatus) {
         ImGuiIO& io = ImGui::GetIO();
         const char* label = m_connected ? "Online" : "Offline";
         // Format label with player count when connected
@@ -615,9 +755,129 @@ void CoreGui::DrawEscapeMenu() {
     ImGui::PopFont();
 
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 14.f);
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(1.f, 1.f, 1.f, 0.60f)); // blue separator
+    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(1.f, 1.f, 1.f, 0.60f));
     ImGui::Separator();
     ImGui::PopStyleColor();
+
+    // ── Player list ───────────────────────────────────────────────────────────
+    {
+        float listTopY  = ImGui::GetCursorPosY() + 10.f;
+        float listBotY  = ph - kBotH - 10.f;
+        float listH     = listBotY - listTopY;
+        float listW     = pw - kPad * 2.f;
+
+        // Header
+        ImGui::SetCursorPosY(listTopY);
+        ImGui::SetCursorPosX(kPad);
+        char hdr[40];
+        snprintf(hdr, sizeof(hdr), "Players  (%d)", (int)m_sessionPlayers.size());
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.57f, 0.68f, 1.f));
+        ImGui::TextUnformatted(hdr);
+        ImGui::PopStyleColor();
+
+        float rowsTopY = ImGui::GetCursorPosY() + 6.f;
+        float rowsH    = listBotY - rowsTopY - 4.f;
+
+        ImGui::SetCursorPos({kPad, rowsTopY});
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.f, 2.f});
+        ImGui::BeginChild("##playerList", {listW, rowsH}, false);
+
+        ImDrawList* pdl = ImGui::GetWindowDrawList();
+        const float rowH    = 34.f;
+        const float dotR    = 5.f;
+        const float addBtnSz = 26.f;
+
+        for (int pi = 0; pi < (int)m_sessionPlayers.size(); ++pi) {
+            const std::string& pname = m_sessionPlayers[pi];
+            bool isLocal  = (pname == m_username);
+            bool alreadySent = m_sentFriendReqs.count(pname) > 0;
+
+            ImVec2 rowTL = ImGui::GetCursorScreenPos();
+            ImVec2 rowBR = {rowTL.x + listW, rowTL.y + rowH};
+
+            // Hover tint
+            bool rowHov = ImGui::IsMouseHoveringRect(rowTL, rowBR);
+            if (rowHov)
+                pdl->AddRectFilled(rowTL, rowBR, IM_COL32(255, 255, 255, 6), 6.f);
+
+            // Online dot
+            pdl->AddCircleFilled({rowTL.x + dotR + 2.f, rowTL.y + rowH * 0.5f},
+                                  dotR, IM_COL32(60, 220, 80, 255));
+
+            // Name
+            float nameX = rowTL.x + dotR * 2.f + 10.f;
+            float nameY = rowTL.y + (rowH - ImGui::GetTextLineHeight()) * 0.5f;
+            ImU32 nameCol = isLocal ? IM_COL32(180, 210, 255, 255)
+                                    : IM_COL32(220, 220, 235, 240);
+            pdl->AddText({nameX, nameY}, nameCol, pname.c_str());
+            if (isLocal) {
+                float youX = nameX + ImGui::CalcTextSize(pname.c_str()).x + 8.f;
+                pdl->AddText({youX, nameY}, IM_COL32(100, 120, 170, 200), "(you)");
+            }
+
+            // "+" add friend button — only for others, icon only
+            if (!isLocal) {
+                float bx = rowTL.x + listW - addBtnSz - 4.f;
+                float by = rowTL.y + (rowH - addBtnSz) * 0.5f;
+                ImVec2 bTL = {bx, by};
+                ImVec2 bBR = {bx + addBtnSz, by + addBtnSz};
+                bool bHov = ImGui::IsMouseHoveringRect(bTL, bBR);
+                bool bClk = bHov && ImGui::IsMouseClicked(0);
+
+                if (alreadySent) {
+                    // Checkmark circle
+                    pdl->AddCircleFilled({bx + addBtnSz*0.5f, by + addBtnSz*0.5f},
+                                         addBtnSz*0.5f, IM_COL32(20, 130, 40, 180), 16);
+                    // ✓ tick
+                    float cx = bx + addBtnSz*0.5f, cy = by + addBtnSz*0.5f;
+                    pdl->AddLine({cx - 5.f, cy}, {cx - 1.f, cy + 4.f}, IM_COL32(255,255,255,230), 2.f);
+                    pdl->AddLine({cx - 1.f, cy + 4.f}, {cx + 5.f, cy - 4.f}, IM_COL32(255,255,255,230), 2.f);
+                } else {
+                    // "+" circle button
+                    ImU32 bgC = bHov ? IM_COL32(28, 92, 240, 200) : IM_COL32(40, 40, 65, 180);
+                    pdl->AddCircleFilled({bx + addBtnSz*0.5f, by + addBtnSz*0.5f},
+                                         addBtnSz*0.5f, bgC, 16);
+                    float cx = bx + addBtnSz*0.5f, cy = by + addBtnSz*0.5f, arm = 5.f;
+                    pdl->AddLine({cx - arm, cy}, {cx + arm, cy}, IM_COL32(255,255,255,240), 2.f);
+                    pdl->AddLine({cx, cy - arm}, {cx, cy + arm}, IM_COL32(255,255,255,240), 2.f);
+
+                    if (bClk && !m_friendOpInFlight) {
+                        m_sentFriendReqs.insert(pname);
+                        m_friendOpInFlight = true;
+                        std::string host = m_authHost; uint16_t port = m_authPort;
+                        std::string from = m_username, to = pname;
+                        m_friendOpFuture = std::async(std::launch::async,
+                            [host, port, from, to]() -> FriendOpResult {
+                                return FriendClient().SendRequest(host, port, from, to);
+                            });
+                    }
+                }
+
+                // Invisible button for ImGui focus bookkeeping
+                ImGui::SetCursorScreenPos(bTL);
+                char bid[32]; snprintf(bid, sizeof(bid), "##padd%d", pi);
+                ImGui::InvisibleButton(bid, {addBtnSz, addBtnSz});
+            }
+
+            // Advance row
+            ImGui::SetCursorScreenPos({rowTL.x, rowTL.y + rowH + 2.f});
+            ImGui::Dummy({listW, 0.f});
+        }
+
+        if (m_sessionPlayers.empty()) {
+            ImGui::SetCursorPosY(rowsH * 0.3f);
+            ImVec2 ts = ImGui::CalcTextSize("No players connected");
+            ImGui::SetCursorPosX((listW - ts.x) * 0.5f);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.35f, 0.45f, 1.f));
+            ImGui::TextUnformatted("No players connected");
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    }
 
     // ── Bottom action bar ─────────────────────────────────────────────────────
     ImGui::SetCursorPosY(ph - kBotH);
@@ -698,6 +958,12 @@ void CoreGui::DrawHomePage() {
         return;
     }
 
+    // Settings is full-screen — skip the home page entirely while it's open
+    if (m_settingsOpen) {
+        DrawSettingsPanel();
+        return;
+    }
+
     ImGuiIO& io   = ImGui::GetIO();
     const float W = io.DisplaySize.x;
     const float H = io.DisplaySize.y;
@@ -735,13 +1001,23 @@ void CoreGui::DrawHomePage() {
         ImGui::TextColored({1.f, 1.f, 1.f, 1.f}, "%s", mono);
     }
 
+    // Poll friend async futures on every home-page frame
+    PollFriendFutures();
+
+    // Auto-refresh friends list (timer counts down, refreshes when 0)
+    {
+        float dt = ImGui::GetIO().DeltaTime;
+        m_friendRefreshT -= dt;
+        if (m_friendRefreshT <= 0.f) KickFriendRefresh();
+    }
+
     struct SideItem { const char* label; };
-    static const SideItem kItems[] = { {"Home"}, {"Avatar"}, {"More"} };
+    static const SideItem kItems[] = { {"Home"}, {"Avatar"}, {"Friends"}, {"More"} };
 
     // Push nav items down below the logo
     const float navOffsetY = 58.f;
 
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 4; ++i) {
         float by = navOffsetY + i * (btnSlotH + 4.f);
 
         ImGui::SetCursorPos({0.f, by});
@@ -751,42 +1027,57 @@ void CoreGui::DrawHomePage() {
         if (clicked) m_sidebarTab = i;
         bool active  = (m_sidebarTab == i);
 
-        // Hover / active tint
         if (active)
-            dl->AddRectFilled({0.f, by}, {sideW, by + btnSlotH},
-                IM_COL32(28, 92, 240, 28));
+            dl->AddRectFilled({0.f, by}, {sideW, by + btnSlotH}, IM_COL32(28, 92, 240, 28));
         else if (hovered)
-            dl->AddRectFilled({0.f, by}, {sideW, by + btnSlotH},
-                IM_COL32(255, 255, 255, 12));
-
-        // Left accent bar — same height as background
+            dl->AddRectFilled({0.f, by}, {sideW, by + btnSlotH}, IM_COL32(255, 255, 255, 12));
         if (active)
-            dl->AddRectFilled({0.f, by}, {3.f, by + btnSlotH},
-                IM_COL32(28, 92, 240, 255), 2.f);
+            dl->AddRectFilled({0.f, by}, {3.f, by + btnSlotH}, IM_COL32(28, 92, 240, 255), 2.f);
 
-        ImU32 iconCol = active ? IM_COL32(80, 150, 255, 255)
-                               : IM_COL32(170, 170, 185, 255);
+        ImU32 iconCol = active ? IM_COL32(80, 150, 255, 255) : IM_COL32(170, 170, 185, 255);
         float cx = sideW * 0.5f;
         float iy = by + 12.f;
 
         if (i == 0) {
-            // House: roof triangle + body rect + door cutout
+            // House
             dl->AddTriangleFilled({cx, iy}, {cx - 12.f, iy + 11.f}, {cx + 12.f, iy + 11.f}, iconCol);
             dl->AddRectFilled({cx - 8.f, iy + 11.f}, {cx + 8.f, iy + 24.f}, iconCol, 1.f);
             dl->AddRectFilled({cx - 3.5f, iy + 16.f}, {cx + 3.5f, iy + 24.f}, IM_COL32(8, 8, 14, 255));
         } else if (i == 1) {
-            // Person: circle head + rounded body
+            // Person (avatar)
             dl->AddCircleFilled({cx, iy + 6.f}, 5.5f, iconCol);
             dl->AddRectFilled({cx - 7.f, iy + 13.f}, {cx + 7.f, iy + 24.f}, iconCol, 3.f);
+        } else if (i == 2) {
+            // Friends — two people + small "+" badge
+            // Back person (offset left)
+            dl->AddCircleFilled({cx - 6.f, iy + 6.f}, 4.5f, iconCol);
+            dl->AddRectFilled({cx - 13.f, iy + 12.f}, {cx + 1.f, iy + 22.f}, iconCol, 2.f);
+            // Front person
+            dl->AddCircleFilled({cx + 3.f, iy + 6.f}, 5.f, iconCol);
+            dl->AddRectFilled({cx - 4.f, iy + 13.f}, {cx + 10.f, iy + 24.f}, iconCol, 2.f);
+            // "+" badge (top-right of icon area)
+            float bx = cx + 9.f, by2 = iy - 1.f, arm = 3.5f;
+            dl->AddCircleFilled({bx, by2}, arm + 2.f, IM_COL32(28, 92, 240, 220), 12);
+            dl->AddLine({bx - arm, by2}, {bx + arm, by2}, IM_COL32(255,255,255,255), 1.5f);
+            dl->AddLine({bx, by2 - arm}, {bx, by2 + arm}, IM_COL32(255,255,255,255), 1.5f);
+            // Pending request badge
+            if (!m_friendRequests.empty()) {
+                float bdgX = cx + 14.f, bdgY = iy + 18.f;
+                dl->AddCircleFilled({bdgX, bdgY}, 6.f, IM_COL32(220, 45, 45, 240), 12);
+                char nc[4]; snprintf(nc, sizeof(nc), "%d", (int)m_friendRequests.size());
+                ImVec2 ntsz = ImGui::CalcTextSize(nc);
+                dl->AddText({bdgX - ntsz.x*0.5f, bdgY - ntsz.y*0.5f},
+                             IM_COL32(255,255,255,255), nc);
+            }
         } else {
-            // Three horizontal dots
+            // More — three dots
             for (int d = 0; d < 3; ++d)
                 dl->AddCircleFilled({cx - 8.f + d * 8.f, iy + 12.f}, 2.8f, iconCol);
         }
 
         // Label
         float lw = ImGui::CalcTextSize(kItems[i].label).x;
-        ImGui::SetCursorPos({(sideW - lw) * 0.5f, by + 38.f});
+        ImGui::SetCursorPos({(sideW - lw) * 0.5f, by + 40.f});
         ImGui::PushStyleColor(ImGuiCol_Text,
             active ? ImVec4(0.50f, 0.72f, 1.f, 1.f) : ImVec4(0.62f, 0.62f, 0.72f, 1.f));
         ImGui::TextUnformatted(kItems[i].label);
@@ -897,6 +1188,8 @@ void CoreGui::DrawHomePage() {
                 m_gameStarted = true;
         }
 
+    } else if (m_sidebarTab == 2) {
+        DrawFriendsTab(cdl, padX, W, sideW);
     } else if (m_sidebarTab == 1) {
         // ── Avatar tab ────────────────────────────────────────────────────────
         ImGui::SetCursorPos({padX, 30.f});
@@ -1057,6 +1350,7 @@ void CoreGui::DrawHomePage() {
             ImVec2 br = {tl.x + csz, tl.y + csz};
 
             bool hov = ImGui::IsMouseHoveringRect(tl, br);
+            bool clk = hov && ImGui::IsMouseClicked(0);
 
             cdl->AddRectFilled(tl, br,
                 hov ? IM_COL32(20, 20, 30, 255) : IM_COL32(13, 13, 20, 255), corner);
@@ -1076,9 +1370,11 @@ void CoreGui::DrawHomePage() {
                     cdl->AddCircleFilled({kx, ly2}, 4.f, IM_COL32(13, 13, 20, 255));
                     cdl->AddCircle      ({kx, ly2}, 4.f, ic, 12, 1.5f);
                 }
+                if (clk) m_settingsOpen = true;
             } else {
                 cdl->AddCircleFilled({cx, icy - 8.f}, 9.f, ic);
                 cdl->AddRectFilled({cx - 11.f, icy + 3.f}, {cx + 11.f, icy + 18.f}, ic, 5.f);
+                // Profile card — placeholder, no action yet
             }
 
             float lw2 = ImGui::CalcTextSize(kOpts[i].label).x;
@@ -1137,6 +1433,782 @@ void CoreGui::DrawHomePage() {
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+
+}
+
+// ── Friends tab (home page) ───────────────────────────────────────────────────
+
+void CoreGui::DrawFriendsTab(ImDrawList* cdl, float padX, float W, float sideW)
+{
+    // Usable width inside the content child, with equal left/right padding
+    const float rowCW = (W - sideW) - padX * 2.f;
+
+    // Record default line height BEFORE pushing the title font
+    const float bodyLH = ImGui::GetTextLineHeight();
+
+    // Title
+    ImGui::SetCursorPos({padX, 30.f});
+    ImGui::PushFont(m_fontTitle);
+    ImGui::TextColored({0.88f, 0.88f, 0.94f, 1.f}, "Friends");
+    ImGui::PopFont();
+
+    float curY = 30.f + bodyLH + 22.f;
+
+    // ── Add Friend row ────────────────────────────────────────────────────────
+    {
+        const float sendW = 76.f, gap = 8.f;
+        const float inputW = rowCW - sendW - gap;
+
+        ImGui::SetCursorPos({padX, curY});
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,        {0.09f, 0.09f, 0.14f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, {0.12f, 0.12f, 0.18f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  {0.07f, 0.07f, 0.11f, 1.f});
+        ImGui::SetNextItemWidth(inputW);
+        bool enter = ImGui::InputText("##addfriend", m_addFriendBuf, sizeof(m_addFriendBuf),
+                                      ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::PopStyleColor(3);
+
+        ImGui::SameLine(0.f, gap);
+        if (m_friendOpInFlight) ImGui::BeginDisabled();
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.11f, 0.36f, 0.94f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.22f, 0.48f, 1.00f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.07f, 0.26f, 0.80f, 1.f});
+        bool sendClk = ImGui::Button("Send##addBtn", {sendW, 0.f});
+        ImGui::PopStyleColor(3);
+        if (m_friendOpInFlight) ImGui::EndDisabled();
+        ImGui::PopStyleVar();   // FrameRounding
+
+        if ((sendClk || enter) && m_addFriendBuf[0] && !m_friendOpInFlight) {
+            std::string target(m_addFriendBuf);
+            m_addFriendStatus.clear();
+            m_friendOpInFlight = true;
+            std::string host = m_authHost; uint16_t port = m_authPort;
+            std::string user = m_username;
+            m_friendOpFuture = std::async(std::launch::async,
+                [host, port, user, target]() -> FriendOpResult {
+                    return FriendClient().SendRequest(host, port, user, target);
+                });
+            memset(m_addFriendBuf, 0, sizeof(m_addFriendBuf));
+        }
+
+        curY += ImGui::GetFrameHeight() + 6.f;
+
+        if (!m_addFriendStatus.empty()) {
+            bool isErr = m_addFriendStatus.rfind("Error", 0) == 0;
+            ImGui::SetCursorPos({padX, curY});
+            ImGui::TextColored(
+                isErr ? ImVec4(0.95f, 0.35f, 0.35f, 1.f) : ImVec4(0.45f, 0.80f, 0.55f, 1.f),
+                "%s", m_addFriendStatus.c_str());
+            curY += bodyLH + 4.f;
+        }
+    }
+
+    curY += 12.f;
+
+    // ── Pending Requests ──────────────────────────────────────────────────────
+    if (!m_friendRequests.empty()) {
+        ImGui::SetCursorPos({padX, curY});
+        char rhdr[48]; snprintf(rhdr, sizeof(rhdr), "Requests  (%d)", (int)m_friendRequests.size());
+        ImGui::PushStyleColor(ImGuiCol_Text, {0.55f, 0.57f, 0.65f, 1.f});
+        ImGui::TextUnformatted(rhdr);
+        ImGui::PopStyleColor();
+        curY += bodyLH + 8.f;
+
+        const float rRowH = 40.f, rBtnW = 68.f, rBtnH = 26.f;
+        int  eraseIdx = -1;
+        bool doAccept = false;
+
+        for (int i = 0; i < (int)m_friendRequests.size(); ++i) {
+            const std::string& from = m_friendRequests[i].fromUser;
+
+            ImGui::SetCursorPos({padX, curY});
+            ImVec2 rowTL = ImGui::GetCursorScreenPos();
+
+            if (ImGui::IsMouseHoveringRect(rowTL, {rowTL.x + rowCW, rowTL.y + rRowH}))
+                cdl->AddRectFilled(rowTL, {rowTL.x + rowCW, rowTL.y + rRowH},
+                                   IM_COL32(255, 255, 255, 5), 6.f);
+
+            // Person icon
+            float icy = rowTL.y + rRowH * 0.5f;
+            float icx = rowTL.x + 14.f;
+            cdl->AddCircleFilled({icx, icy - 5.f}, 5.f,  IM_COL32(100, 130, 200, 220));
+            cdl->AddRectFilled({icx - 6.f, icy + 1.f}, {icx + 6.f, icy + 11.f},
+                               IM_COL32(100, 130, 200, 220), 3.f);
+
+            // Name
+            cdl->AddText({rowTL.x + 30.f, rowTL.y + (rRowH - bodyLH) * 0.5f},
+                         IM_COL32(210, 210, 230, 240), from.c_str());
+
+            // Buttons — positioned from right edge
+            float rightEdge = rowTL.x + rowCW;
+            float decX = rightEdge - rBtnW;
+            float accX = decX - rBtnW - 8.f;
+            float btnY = rowTL.y + (rRowH - rBtnH) * 0.5f;
+
+            ImGui::SetCursorScreenPos({accX, btnY});
+            ImGui::PushStyleColor(ImGuiCol_Button,        {0.11f, 0.36f, 0.94f, 1.f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.22f, 0.48f, 1.00f, 1.f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.07f, 0.26f, 0.80f, 1.f});
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.f);
+            char aid[32]; snprintf(aid, sizeof(aid), "Accept##ra%d", i);
+            if (ImGui::Button(aid, {rBtnW, rBtnH})) { eraseIdx = i; doAccept = true; }
+            ImGui::PopStyleVar(); ImGui::PopStyleColor(3);
+
+            ImGui::SetCursorScreenPos({decX, btnY});
+            ImGui::PushStyleColor(ImGuiCol_Button,        {0.14f, 0.08f, 0.08f, 1.f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.30f, 0.10f, 0.10f, 1.f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.10f, 0.05f, 0.05f, 1.f});
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.f);
+            char did[32]; snprintf(did, sizeof(did), "Decline##rd%d", i);
+            if (ImGui::Button(did, {rBtnW, rBtnH})) { eraseIdx = i; doAccept = false; }
+            ImGui::PopStyleVar(); ImGui::PopStyleColor(3);
+
+            curY += rRowH + 4.f;
+        }
+
+        // Handle accept / decline after the loop to avoid mutating the vector mid-loop
+        if (eraseIdx >= 0 && !m_friendOpInFlight) {
+            std::string fromU = m_friendRequests[eraseIdx].fromUser;
+            m_friendOpInFlight = true;
+            std::string host = m_authHost; uint16_t port = m_authPort;
+            std::string user = m_username;
+            bool accept = doAccept;
+            m_friendOpFuture = std::async(std::launch::async,
+                [host, port, user, fromU, accept]() -> FriendOpResult {
+                    return accept
+                        ? FriendClient().AcceptRequest (host, port, user, fromU)
+                        : FriendClient().DeclineRequest(host, port, user, fromU);
+                });
+            m_friendRequests.erase(m_friendRequests.begin() + eraseIdx);
+            if (accept) KickFriendRefresh();  // refresh friends list after accepting
+        }
+
+        // Thin divider between requests and friends list
+        curY += 8.f;
+        ImGui::SetCursorPos({padX, curY});
+        ImVec2 sp = ImGui::GetCursorScreenPos();
+        cdl->AddLine(sp, {sp.x + rowCW, sp.y}, IM_COL32(35, 35, 55, 200), 1.f);
+        curY += 12.f;
+    }
+
+    // ── Friends list ──────────────────────────────────────────────────────────
+    {
+        ImGui::SetCursorPos({padX, curY});
+        char fhdr[48]; snprintf(fhdr, sizeof(fhdr), "Friends  (%d)", (int)m_friends.size());
+        ImGui::PushStyleColor(ImGuiCol_Text, {0.55f, 0.57f, 0.65f, 1.f});
+        ImGui::TextUnformatted(fhdr);
+        ImGui::PopStyleColor();
+        curY += bodyLH + 8.f;
+
+        if (m_friends.empty()) {
+            ImGui::SetCursorPos({padX, curY + 18.f});
+            const char* emptyMsg = m_friendListInFlight
+                ? "Refreshing friends list…"
+                : "No friends yet — add someone above!";
+            float tw = ImGui::CalcTextSize(emptyMsg).x;
+            ImGui::SetCursorPosX(padX + (rowCW - tw) * 0.5f);
+            ImGui::PushStyleColor(ImGuiCol_Text, {0.32f, 0.32f, 0.42f, 1.f});
+            ImGui::TextUnformatted(emptyMsg);
+            ImGui::PopStyleColor();
+        } else {
+            // Scrollable friends list — fills remaining vertical space
+            ImGui::SetCursorPos({padX, curY});
+            float listH = ImGui::GetContentRegionAvail().y - 8.f;
+            if (listH < 40.f) listH = 40.f;
+
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.f, 0.f, 0.f, 0.f});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.f, 2.f});
+            ImGui::BeginChild("##friendList", {rowCW, listH}, false);
+            ImDrawList* fdl = ImGui::GetWindowDrawList();
+
+            const float fRowH = 44.f;
+            const float joinW = 54.f, joinH = 28.f;
+            const float dotR  = 5.f;
+
+            // Sort: online/in-game first, then plain online, then offline
+            std::vector<int> sorted;
+            sorted.reserve(m_friends.size());
+            for (int i = 0; i < (int)m_friends.size(); ++i) sorted.push_back(i);
+            std::sort(sorted.begin(), sorted.end(), [&](int a, int b) {
+                int sa = m_friends[a].inGame ? 2 : (m_friends[a].online ? 1 : 0);
+                int sb = m_friends[b].inGame ? 2 : (m_friends[b].online ? 1 : 0);
+                return sa > sb;
+            });
+
+            for (int idx : sorted) {
+                const FriendEntry& fr = m_friends[idx];
+
+                ImVec2 rowTL = ImGui::GetCursorScreenPos();
+                ImVec2 rowBR = {rowTL.x + rowCW, rowTL.y + fRowH};
+
+                bool rowHov = ImGui::IsMouseHoveringRect(rowTL, rowBR);
+                if (rowHov)
+                    fdl->AddRectFilled(rowTL, rowBR, IM_COL32(255, 255, 255, 7), 6.f);
+
+                // Status dot
+                float dotCX = rowTL.x + 12.f;
+                float dotCY = rowTL.y + fRowH * 0.5f;
+                ImU32 dotCol = fr.inGame  ? IM_COL32(80, 200, 255, 255) :
+                               fr.online  ? IM_COL32(60, 220, 80,  255) :
+                                            IM_COL32(80, 80,  90,  200);
+                fdl->AddCircleFilled({dotCX, dotCY}, dotR, dotCol);
+
+                // Name
+                float nameX = rowTL.x + 26.f;
+                float nameY = rowTL.y + (fr.online ? (fRowH * 0.5f - bodyLH - 1.f)
+                                                   : (fRowH - bodyLH) * 0.5f);
+                ImU32 nameCol = fr.online ? IM_COL32(220, 220, 235, 240)
+                                          : IM_COL32(110, 110, 125, 190);
+                fdl->AddText({nameX, nameY}, nameCol, fr.username.c_str());
+
+                // Status sub-label (only when online)
+                if (fr.online) {
+                    const char* sub = fr.inGame ? "In Game" : "Online";
+                    ImU32 subCol = fr.inGame ? IM_COL32(80, 200, 255, 180)
+                                             : IM_COL32(60, 200, 80,  180);
+                    fdl->AddText({nameX, rowTL.y + fRowH * 0.5f + 2.f}, subCol, sub);
+                }
+
+                // Join button — only for in-game friends and when no join is in flight
+                if (fr.inGame && !m_joinInFlight) {
+                    float jx = rowTL.x + rowCW - joinW - 8.f;
+                    float jy = rowTL.y + (fRowH - joinH) * 0.5f;
+                    ImVec2 jTL = {jx, jy}, jBR = {jx + joinW, jy + joinH};
+
+                    bool jHov = ImGui::IsMouseHoveringRect(jTL, jBR);
+                    fdl->AddRectFilled(jTL, jBR,
+                        jHov ? IM_COL32(40, 110, 255, 230) : IM_COL32(28, 92, 240, 190), 6.f);
+                    fdl->AddRect(jTL, jBR, IM_COL32(60, 130, 255, 140), 6.f, 0, 1.f);
+
+                    ImVec2 jts = ImGui::CalcTextSize("Join");
+                    fdl->AddText({jx + (joinW - jts.x) * 0.5f,
+                                  jy + (joinH - jts.y) * 0.5f},
+                                 IM_COL32(255, 255, 255, 240), "Join");
+
+                    ImGui::SetCursorScreenPos(jTL);
+                    char jid[32]; snprintf(jid, sizeof(jid), "##join%d", idx);
+                    if (ImGui::InvisibleButton(jid, {joinW, joinH})) {
+                        m_joinInFlight = true;
+                        std::string host = m_authHost; uint16_t port = m_authPort;
+                        std::string user = m_username, target = fr.username;
+                        m_joinFriendFuture = std::async(std::launch::async,
+                            [host, port, user, target]() -> JoinFriendResult {
+                                return FriendClient().JoinFriend(host, port, user, target);
+                            });
+                    }
+                }
+
+                // Advance cursor to next row
+                ImGui::SetCursorScreenPos({rowTL.x, rowTL.y + fRowH + 2.f});
+                ImGui::Dummy({rowCW, 0.f});
+            }
+
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor();
+        }
+    }
+}
+
+// ── App Settings panel (full-screen) ─────────────────────────────────────────
+
+void CoreGui::DrawSettingsPanel() {
+    ImGuiIO& io = ImGui::GetIO();
+    const float W = io.DisplaySize.x;
+    const float H = io.DisplaySize.y;
+
+    // Back on Escape
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        m_settingsOpen = false;
+
+    // ── Full-screen background window ─────────────────────────────────────────
+    ImGui::SetNextWindowPos({0.f, 0.f});
+    ImGui::SetNextWindowSize({W, H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.07f, 0.07f, 0.10f, 1.f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {0.f, 0.f});
+    ImGui::Begin("##settingsFull", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoSavedSettings);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // ── Sidebar ───────────────────────────────────────────────────────────────
+    const float SW = 240.f;
+
+    dl->AddRectFilled({0.f, 0.f}, {SW, H}, IM_COL32(8, 8, 14, 255));
+    dl->AddLine({SW, 0.f}, {SW, H}, IM_COL32(38, 38, 60, 200), 1.f);
+
+    // ── Back button ───────────────────────────────────────────────────────────
+    const float backH = 44.f;
+    const float backY = 18.f;
+    ImGui::SetCursorPos({0.f, backY});
+    bool backClicked = ImGui::InvisibleButton("##back", {SW, backH});
+    bool backHov     = ImGui::IsItemHovered();
+    if (backClicked) m_settingsOpen = false;
+
+    if (backHov)
+        dl->AddRectFilled({0.f, backY}, {SW, backY + backH}, IM_COL32(255, 255, 255, 10));
+
+    // Left-arrow chevron
+    {
+        float ax = 22.f, ay = backY + backH * 0.5f;
+        float aw = 8.f,  ah = 7.f;
+        ImU32 ac = backHov ? IM_COL32(140, 180, 255, 255) : IM_COL32(120, 120, 150, 220);
+        dl->AddLine({ax + aw, ay - ah}, {ax,       ay     }, ac, 2.0f);
+        dl->AddLine({ax,       ay     }, {ax + aw, ay + ah}, ac, 2.0f);
+    }
+    // "Back" label
+    {
+        const char* lbl = "Back";
+        ImVec2 tsz = ImGui::CalcTextSize(lbl);
+        ImU32  tc  = backHov ? IM_COL32(180, 210, 255, 255) : IM_COL32(140, 140, 170, 220);
+        dl->AddText({38.f, backY + (backH - tsz.y) * 0.5f}, tc, lbl);
+    }
+
+    // Thin separator line below back button
+    dl->AddLine({14.f, backY + backH + 10.f}, {SW - 14.f, backY + backH + 10.f},
+                IM_COL32(38, 38, 60, 180), 1.f);
+
+    // "Settings" title
+    {
+        const float titleY = backY + backH + 26.f;
+        ImGui::SetCursorPos({18.f, titleY});
+        if (m_fontTitle) ImGui::PushFont(m_fontTitle);
+        ImGui::PushStyleColor(ImGuiCol_Text, {0.88f, 0.88f, 0.94f, 1.f});
+        ImGui::TextUnformatted("Settings");
+        ImGui::PopStyleColor();
+        if (m_fontTitle) ImGui::PopFont();
+    }
+
+    // ── Nav items ─────────────────────────────────────────────────────────────
+    static const char* kNav[] = { "Account", "Appearance", "Privacy", "About" };
+    constexpr int kNavCount   = 4;
+    const float   itemH       = 44.f;
+    const float   navStartY   = backY + backH + 26.f +
+                                (m_fontTitle
+                                    ? ImGui::CalcTextSize("Settings").y * (30.f / 17.f)
+                                    : ImGui::GetTextLineHeight())
+                                + 18.f;
+
+    for (int i = 0; i < kNavCount; ++i) {
+        float iy  = navStartY + i * (itemH + 3.f);
+        bool  sel = (m_settingsTab == i);
+
+        ImGui::SetCursorPos({0.f, iy});
+        char bid[16]; snprintf(bid, sizeof(bid), "##sn%d", i);
+        bool clicked = ImGui::InvisibleButton(bid, {SW, itemH});
+        bool hov     = ImGui::IsItemHovered();
+        if (clicked) m_settingsTab = i;
+
+        if (sel)
+            dl->AddRectFilled({0.f, iy}, {SW, iy + itemH}, IM_COL32(28, 92, 240, 28));
+        else if (hov)
+            dl->AddRectFilled({0.f, iy}, {SW, iy + itemH}, IM_COL32(255, 255, 255, 10));
+
+        // Active accent bar on the right edge
+        if (sel)
+            dl->AddRectFilled({SW - 3.f, iy}, {SW, iy + itemH},
+                              IM_COL32(28, 92, 240, 255), 2.f);
+
+        ImVec2 tsz = ImGui::CalcTextSize(kNav[i]);
+        ImU32  tc  = sel ? IM_COL32(128, 184, 255, 255) : IM_COL32(160, 160, 185, 230);
+        dl->AddText({22.f, iy + (itemH - tsz.y) * 0.5f}, tc, kNav[i]);
+    }
+
+    // ── Content area ──────────────────────────────────────────────────────────
+    // Content column: centred within the right half, capped at 640 px wide
+    const float CX     = SW + 1.f;
+    const float CW_raw = W - CX;
+    const float kColW  = std::min(CW_raw - 80.f, 640.f);  // readable column width
+    const float colOff = (CW_raw - kColW) * 0.5f;          // left offset within child
+
+    ImGui::SetCursorPos({CX, 0.f});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.f, 0.f, 0.f, 0.f});
+    ImGui::BeginChild("##settingsContent", {CW_raw, H}, false);
+
+    // Column padding so all text / widgets start at the same X
+    const float pad    = colOff + 4.f;
+    const float CW     = kColW;   // width used by layout helpers
+
+    ImGui::SetCursorPos({pad, 40.f});
+
+    const ImVec4 kLabel = {0.55f, 0.57f, 0.65f, 1.f};
+    const ImVec4 kValue = {0.88f, 0.88f, 0.94f, 1.f};
+
+    // Helper: horizontal rule spanning the column
+    auto HRule = [&]() {
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.f);
+        ImGui::SetCursorPosX(pad);
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddLine(
+            {p.x, p.y}, {p.x + CW, p.y},
+            IM_COL32(35, 35, 55, 200), 1.f);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.f);
+    };
+
+    // Helper: right-aligned toggle switch inside the column
+    auto Toggle = [&](const char* id, bool v) -> bool {
+        const float tw = 40.f, th = 22.f, tr = 11.f;
+        ImGui::PushID(id);
+        // Position: right edge of column
+        ImVec2 origin = ImGui::GetCursorScreenPos();
+        ImVec2 tp = { origin.x + CW - tw, origin.y };
+        ImGui::InvisibleButton("##tgl", {tw, th});
+        if (ImGui::IsItemClicked()) v = !v;
+        ImDrawList* tdl = ImGui::GetWindowDrawList();
+        ImU32 bg  = v ? IM_COL32(28, 92, 240, 220) : IM_COL32(50, 50, 70, 200);
+        tdl->AddRectFilled(tp, {tp.x + tw, tp.y + th}, bg, tr);
+        float knobX = v ? tp.x + tw - tr : tp.x + tr;
+        tdl->AddCircleFilled({knobX, tp.y + th * 0.5f}, tr - 3.f, IM_COL32(230, 230, 245, 255));
+        ImGui::PopID();
+        return v;
+    };
+
+    // ── ProfileRow: shared helper for editable / read-only account rows ─────────
+    // isEditable=false  → shows "Cannot change" on the right, no button
+    // showRemove=true   → shows a × button when the field has a value
+    auto ProfileRow = [&](
+        const char*  labelText,
+        const char*  placeholder,   // dim text shown when value is empty
+        std::string& value,
+        bool&        editing,
+        char*        buf,
+        int          bufSz,
+        bool         isEditable,
+        bool         showRemove
+    ) {
+        const float kEditW   = 52.f;   // "Edit" / "Add" button
+        const float kRemW    = 28.f;   // "×" button
+        const float kSaveW   = 56.f;
+        const float kCancelW = 70.f;
+        const float kGap     = 6.f;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.f);
+
+        if (!editing || !isEditable) {
+            // ── Display mode ──────────────────────────────────────────────────
+            ImGui::SetCursorPosX(pad);
+            ImGui::PushStyleColor(ImGuiCol_Text, kLabel);
+            ImGui::TextUnformatted(labelText);
+            ImGui::PopStyleColor();
+
+            bool hasVal = !value.empty();
+            const char* dispVal = hasVal ? value.c_str() : placeholder;
+            ImVec4 valCol = hasVal ? kValue : ImVec4(0.38f, 0.38f, 0.48f, 1.f);
+
+            if (isEditable) {
+                bool hasRem   = showRemove && hasVal;
+                float btnRight = pad + CW;
+                float remRight = hasRem ? btnRight - 0.f              : 0.f;
+                float btnLeft  = hasRem ? btnRight - kRemW - kGap - kEditW
+                                        : btnRight - kEditW;
+
+                // Value text: right of label, left of buttons
+                float valRight = btnLeft - 10.f;
+                float valLeft  = valRight - ImGui::CalcTextSize(dispVal).x;
+                ImGui::SameLine(std::max(valLeft, pad + ImGui::CalcTextSize(labelText).x + 12.f));
+                ImGui::PushStyleColor(ImGuiCol_Text, valCol);
+                ImGui::TextUnformatted(dispVal);
+                ImGui::PopStyleColor();
+
+                // Edit / Add button
+                ImGui::SameLine(btnLeft);
+                char eid[48]; snprintf(eid, sizeof(eid), "%s##e_%s", hasVal ? "Edit" : "Add", labelText);
+                ImGui::PushStyleColor(ImGuiCol_Button,        {0.13f, 0.13f, 0.20f, 1.f});
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.22f, 0.22f, 0.34f, 1.f});
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.09f, 0.09f, 0.14f, 1.f});
+                if (ImGui::Button(eid, {kEditW, 0.f})) {
+                    editing = true;
+                    strncpy(buf, value.c_str(), bufSz - 1);
+                    buf[bufSz - 1] = '\0';
+                }
+                ImGui::PopStyleColor(3);
+
+                // Remove button
+                if (hasRem) {
+                    ImGui::SameLine(pad + CW - kRemW);
+                    char rid[48]; snprintf(rid, sizeof(rid), "x##r_%s", labelText);
+                    ImGui::PushStyleColor(ImGuiCol_Button,        {0.22f, 0.05f, 0.05f, 1.f});
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.38f, 0.09f, 0.09f, 1.f});
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.14f, 0.03f, 0.03f, 1.f});
+                    if (ImGui::Button(rid, {kRemW, 0.f})) {
+                        value.clear();
+                        SaveProfile();
+                    }
+                    ImGui::PopStyleColor(3);
+                }
+            } else {
+                // Read-only value
+                ImGui::SameLine(pad + CW - ImGui::CalcTextSize(dispVal).x
+                                       - ImGui::CalcTextSize("Cannot change").x - 14.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, kValue);
+                ImGui::TextUnformatted(dispVal);
+                ImGui::PopStyleColor();
+                ImGui::SameLine(pad + CW - ImGui::CalcTextSize("Cannot change").x);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.32f, 0.32f, 0.42f, 1.f));
+                ImGui::TextUnformatted("Cannot change");
+                ImGui::PopStyleColor();
+            }
+        } else {
+            // ── Edit mode ─────────────────────────────────────────────────────
+            ImGui::SetCursorPosX(pad);
+            ImGui::PushStyleColor(ImGuiCol_Text, kLabel);
+            ImGui::TextUnformatted(labelText);
+            ImGui::PopStyleColor();
+
+            ImGui::SetCursorPosX(pad);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,        {0.09f, 0.09f, 0.14f, 1.f});
+            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, {0.12f, 0.12f, 0.18f, 1.f});
+            ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  {0.07f, 0.07f, 0.11f, 1.f});
+            float inputW = CW - kSaveW - kCancelW - kGap * 2.f - 2.f;
+            ImGui::SetNextItemWidth(inputW);
+            char iid[48]; snprintf(iid, sizeof(iid), "##inp_%s", labelText);
+            bool enter = ImGui::InputText(iid, buf, bufSz, ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::PopStyleColor(3);
+
+            ImGui::SameLine(0.f, kGap);
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                {m_appSettings.accentR,        m_appSettings.accentG,        m_appSettings.accentB,        1.f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                {m_appSettings.accentR * 1.15f, m_appSettings.accentG * 1.15f, m_appSettings.accentB * 1.15f, 1.f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                {m_appSettings.accentR * 0.80f, m_appSettings.accentG * 0.80f, m_appSettings.accentB * 0.80f, 1.f});
+            char sid[48]; snprintf(sid, sizeof(sid), "Save##sv_%s", labelText);
+            if (ImGui::Button(sid, {kSaveW, 0.f}) || enter) {
+                value   = buf;
+                editing = false;
+                SaveProfile();
+            }
+            ImGui::PopStyleColor(3);
+
+            ImGui::SameLine(0.f, kGap);
+            ImGui::PushStyleColor(ImGuiCol_Button,        {0.12f, 0.12f, 0.18f, 1.f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.20f, 0.20f, 0.30f, 1.f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.08f, 0.08f, 0.12f, 1.f});
+            char cid[48]; snprintf(cid, sizeof(cid), "Cancel##c_%s", labelText);
+            if (ImGui::Button(cid, {kCancelW, 0.f}))
+                editing = false;
+            ImGui::PopStyleColor(3);
+        }
+
+        ImGui::PopStyleVar();  // FrameRounding
+        HRule();
+    };
+
+    if (m_settingsTab == 0) {
+        // ── Account ───────────────────────────────────────────────────────────
+        ImGui::SetCursorPosX(pad);
+        ImGui::PushStyleColor(ImGuiCol_Text, kValue);
+        ImGui::TextUnformatted("Account");
+        ImGui::PopStyleColor();
+        HRule();
+
+        // Display Name (editable)
+        ProfileRow("Display Name", "Not set",
+                   m_displayName, m_editingDisplayName,
+                   m_inputDisplayName, (int)sizeof(m_inputDisplayName),
+                   true, false);
+
+        // Username (read-only) — use a local so ProfileRow can't mutate it
+        { bool _unused = false; char _buf[4] = {};
+          ProfileRow("Username", m_username.c_str(),
+                     m_username, _unused, _buf, 1,
+                     false, false); }
+
+        // Email (optional)
+        ProfileRow("Email", "Not set",
+                   m_email, m_editingEmail,
+                   m_inputEmail, (int)sizeof(m_inputEmail),
+                   true, true);
+
+        // Phone number (optional)
+        ProfileRow("Phone number", "Not set",
+                   m_phoneNumber, m_editingPhone,
+                   m_inputPhone, (int)sizeof(m_inputPhone),
+                   true, true);
+
+        // Sign out
+        ImGui::SetCursorPosX(pad);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.f);
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.25f, 0.05f, 0.05f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.40f, 0.08f, 0.08f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.18f, 0.04f, 0.04f, 1.f});
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
+        if (ImGui::Button("Sign Out", {CW, 40.f})) {
+            ClearSession();
+            m_settingsOpen = false;
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+
+    } else if (m_settingsTab == 1) {
+        // ── Appearance ────────────────────────────────────────────────────────
+        ImGui::SetCursorPosX(pad);
+        ImGui::PushStyleColor(ImGuiCol_Text, kValue);
+        ImGui::TextUnformatted("Appearance");
+        ImGui::PopStyleColor();
+        HRule();
+
+        // Accent colour
+        ImGui::SetCursorPosX(pad);
+        ImGui::PushStyleColor(ImGuiCol_Text, kLabel);
+        ImGui::TextUnformatted("Accent colour");
+        ImGui::PopStyleColor();
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.f);
+        ImGui::SetCursorPosX(pad);
+
+        static const ImVec4 kAccents[] = {
+            {0.11f, 0.36f, 0.94f, 1.f},  // blue (default)
+            {0.08f, 0.68f, 0.44f, 1.f},  // teal
+            {0.60f, 0.18f, 0.90f, 1.f},  // purple
+            {0.94f, 0.36f, 0.11f, 1.f},  // orange
+            {0.90f, 0.18f, 0.28f, 1.f},  // red
+            {0.14f, 0.62f, 0.10f, 1.f},  // green
+        };
+        bool accentChanged = false;
+        for (int k = 0; k < 6; ++k) {
+            if (k > 0) ImGui::SameLine(0.f, 10.f);
+            ImGui::PushID(k);
+            const ImVec4& ac = kAccents[k];
+            bool isCur = fabsf(m_appSettings.accentR - ac.x) < 0.01f &&
+                         fabsf(m_appSettings.accentG - ac.y) < 0.01f &&
+                         fabsf(m_appSettings.accentB - ac.z) < 0.01f;
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                isCur ? ac : ImVec4(ac.x*0.50f, ac.y*0.50f, ac.z*0.50f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ac);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                ImVec4(ac.x*0.8f, ac.y*0.8f, ac.z*0.8f, 1.f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 22.f);
+            if (ImGui::Button("##ac", {32.f, 32.f})) {
+                m_appSettings.accentR = ac.x;
+                m_appSettings.accentG = ac.y;
+                m_appSettings.accentB = ac.z;
+                accentChanged = true;
+            }
+            if (isCur) {
+                ImVec2 bmin = ImGui::GetItemRectMin();
+                ImVec2 bmax = ImGui::GetItemRectMax();
+                ImVec2 bctr = {(bmin.x + bmax.x) * 0.5f, (bmin.y + bmax.y) * 0.5f};
+                ImGui::GetWindowDrawList()->AddCircle(bctr, 18.f, IM_COL32(255, 255, 255, 200), 28, 2.2f);
+            }
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(3);
+            ImGui::PopID();
+        }
+        if (accentChanged) SaveAppSettings();
+        HRule();
+
+        // UI Scale
+        ImGui::SetCursorPosX(pad);
+        ImGui::PushStyleColor(ImGuiCol_Text, kLabel);
+        ImGui::TextUnformatted("UI Scale");
+        ImGui::PopStyleColor();
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.f);
+        ImGui::SetCursorPosX(pad);
+
+        static const float kScales[]     = {0.85f, 1.0f, 1.15f, 1.30f};
+        static const char* kScaleLbls[]  = {"Small", "Default", "Large", "XL"};
+        bool scaleChanged = false;
+        for (int k = 0; k < 4; ++k) {
+            if (k > 0) ImGui::SameLine(0.f, 8.f);
+            ImGui::PushID(100 + k);
+            bool isCur = fabsf(m_appSettings.uiScale - kScales[k]) < 0.01f;
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                isCur ? ImVec4(m_appSettings.accentR, m_appSettings.accentG, m_appSettings.accentB, 1.f)
+                      : ImVec4(0.12f, 0.12f, 0.18f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                ImVec4(m_appSettings.accentR*0.75f, m_appSettings.accentG*0.75f, m_appSettings.accentB*0.75f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                ImVec4(m_appSettings.accentR*0.55f, m_appSettings.accentG*0.55f, m_appSettings.accentB*0.55f, 1.f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
+            if (ImGui::Button(kScaleLbls[k], {90.f, 36.f})) {
+                m_appSettings.uiScale = kScales[k];
+                scaleChanged = true;
+            }
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(3);
+            ImGui::PopID();
+        }
+        if (scaleChanged) SaveAppSettings();
+
+    } else if (m_settingsTab == 2) {
+        // ── Privacy ───────────────────────────────────────────────────────────
+        ImGui::SetCursorPosX(pad);
+        ImGui::PushStyleColor(ImGuiCol_Text, kValue);
+        ImGui::TextUnformatted("Privacy");
+        ImGui::PopStyleColor();
+        HRule();
+
+        // Helper: one labelled toggle row
+        auto ToggleRow = [&](const char* rowId, const char* label, const char* desc, bool& val) {
+            // Reserve the row height before drawing so both label and toggle sit on the same baseline
+            float rowY = ImGui::GetCursorPosY();
+            ImGui::SetCursorPos({pad, rowY});
+            ImGui::PushStyleColor(ImGuiCol_Text, kValue);
+            ImGui::TextUnformatted(label);
+            ImGui::PopStyleColor();
+            ImGui::SetCursorPosX(pad);
+            ImGui::PushStyleColor(ImGuiCol_Text, kLabel);
+            ImGui::TextUnformatted(desc);
+            ImGui::PopStyleColor();
+
+            // Toggle: vertically centred on the label line
+            float th = 22.f;
+            float tY = rowY + (ImGui::GetTextLineHeight() - th) * 0.5f;
+            ImGui::SetCursorPos({pad + CW - 40.f, tY});
+            bool nv = Toggle(rowId, val);
+            if (nv != val) { val = nv; SaveAppSettings(); }
+
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.f);
+            HRule();
+        };
+
+        bool showNT = m_appSettings.showNametags;
+        ToggleRow("nametags", "Show player nametags",
+                  "Display floating names above other players", showNT);
+        m_appSettings.showNametags = showNT;
+
+        bool showOS = m_appSettings.showOnlineStatus;
+        ToggleRow("online", "Show online status",
+                  "Show the Online/Offline pill in-game", showOS);
+        m_appSettings.showOnlineStatus = showOS;
+
+    } else {
+        // ── About ─────────────────────────────────────────────────────────────
+        ImGui::SetCursorPosX(pad);
+        ImGui::PushStyleColor(ImGuiCol_Text, kValue);
+        ImGui::TextUnformatted("About");
+        ImGui::PopStyleColor();
+        HRule();
+
+        auto AboutRow = [&](const char* key, const char* val) {
+            ImGui::SetCursorPosX(pad);
+            ImGui::PushStyleColor(ImGuiCol_Text, kLabel);
+            ImGui::TextUnformatted(key);
+            ImGui::PopStyleColor();
+            ImGui::SameLine(pad + CW - ImGui::CalcTextSize(val).x);
+            ImGui::PushStyleColor(ImGuiCol_Text, kValue);
+            ImGui::TextUnformatted(val);
+            ImGui::PopStyleColor();
+            HRule();
+        };
+
+        AboutRow("App",      "CreateToPlay");
+        AboutRow("Version",  "0.1.0");
+        AboutRow("Build",    __DATE__);
+        AboutRow("Engine",   "C++ / OpenGL 3.3");
+        AboutRow("Physics",  "Bullet3 3.25");
+        AboutRow("UI",       "Dear ImGui 1.91");
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();  // ChildBg
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);   // WindowBorderSize, WindowPadding
+    ImGui::PopStyleColor();  // WindowBg
 }
 
 // ── Auth screen (login / signup) ──────────────────────────────────────────────

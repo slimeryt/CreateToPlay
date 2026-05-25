@@ -54,17 +54,22 @@ void CharacterController::Update(float dt) {
     float newVz        = curVel.z() + (wz * kMoveSpeed - curVel.z()) * velAlpha;
     m_character->GetBody()->setLinearVelocity(btVector3(newVx, curVel.y(), newVz));
 
-    // Smooth facing rotation — lerp toward movement direction, not instant snap
-    if (len > 0.001f)
-        m_targetFacingYaw = std::atan2(wx, wz);
+    if (m_shiftLock) {
+        // Shift lock: character always faces exactly where the camera points — no lerp
+        m_targetFacingYaw = m_camera->GetYaw() + 3.14159f;
+        m_character->SetFacingYaw(m_targetFacingYaw);
+    } else {
+        // Normal: face the direction of movement, smooth lerp
+        if (len > 0.001f)
+            m_targetFacingYaw = std::atan2(wx, wz);
 
-    float current = m_character->GetFacingYaw();
-    float diff    = m_targetFacingYaw - current;
-    // Wrap to [-π, π] so we always take the short arc
-    while (diff >  3.14159f) diff -= 6.28318f;
-    while (diff < -3.14159f) diff += 6.28318f;
-    float rotAlpha = 1.0f - std::exp(-12.0f * dt);
-    m_character->SetFacingYaw(current + diff * rotAlpha);
+        float current = m_character->GetFacingYaw();
+        float diff    = m_targetFacingYaw - current;
+        while (diff >  3.14159f) diff -= 6.28318f;
+        while (diff < -3.14159f) diff += 6.28318f;
+        float rotAlpha = 1.0f - std::exp(-12.0f * dt);
+        m_character->SetFacingYaw(current + diff * rotAlpha);
+    }
 
     // Jump — holding space re-jumps as soon as the character lands
     if (m_input->IsKeyDown(SDL_SCANCODE_SPACE) && IsGrounded()) {

@@ -58,3 +58,14 @@ FetchContent_Declare(imgui
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(imgui)
+
+# ── ImGuizmo (translate / rotate / scale gizmos for Studio) ──────────────────
+FetchContent_Declare(imguizmo
+    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(imguizmo)
+
+include(${CMAKE_SOURCE_DIR}/cmake/ApplyImGuizmoStudioPatch.cmake)
+apply_imguizmo_studio_patch(${imguizmo_SOURCE_DIR})

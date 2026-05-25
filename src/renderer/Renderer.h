@@ -3,6 +3,7 @@
 #include "Mesh.h"
 #include <glad/glad.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <string>
 
 class BasePart;
@@ -20,6 +21,9 @@ public:
     // Draw an arbitrary box without a BasePart (used for remote player ghosts)
     void DrawBox(glm::vec3 pos, glm::vec3 size, glm::vec3 color,
                  float yaw = 0.f, float reflectance = 0.04f);
+    // Quaternion overload — used for animated limbs
+    void DrawBox(glm::vec3 pos, glm::vec3 size, glm::vec3 color,
+                 const glm::quat& rotation, float reflectance = 0.04f);
     void EndFrame();           // bloom + tonemap + gamma → default FBO
 
 private:

@@ -3,8 +3,10 @@
 #include <imgui.h>
 #include <string>
 #include <vector>
+#include <set>
 #include <future>
 #include "auth/AuthClient.h"
+#include "auth/FriendClient.h"
 
 // Forward-declare OpenGL types without pulling in glad.h here
 // (GLuint == unsigned int on every platform we target)
@@ -41,6 +43,20 @@ public:
         m_connected   = connected;
         m_playerCount = playerCount;
     }
+    void SetShiftLock(bool on) { m_shiftLock = on; }
+
+    // Current session player names (set by Engine each frame from NetClient)
+    void SetSessionPlayers(std::vector<std::string> players) {
+        m_sessionPlayers = std::move(players);
+    }
+
+    // Join-friend override: Engine reads this after GameStarted() fires
+    bool               HasOverrideJoinAddr() const { return m_hasOverrideJoinAddr; }
+    const std::string& GetOverrideJoinAddr() const { return m_overrideJoinAddr; }
+    void               ClearOverrideJoinAddr()      {
+        m_hasOverrideJoinAddr = false;
+        m_overrideJoinAddr.clear();
+    }
 
     // Avatar colour accessors (float[3] = {r,g,b} in 0-1 range)
     const float* GetAvatarSkin()  const { return m_avatarSkin;  }
@@ -57,11 +73,23 @@ public:
     bool               IsLoggedIn()    const { return m_loggedIn; }
     const std::string& GetUsername()   const { return m_username; }
 
+    // App-level settings (not game settings — launcher/UI preferences only)
+    struct AppSettings {
+        float accentR   = 0.11f;  // accent colour (default: blue)
+        float accentG   = 0.36f;
+        float accentB   = 0.94f;
+        float uiScale   = 1.0f;   // 0.85 / 1.0 / 1.15 / 1.30
+        bool  showNametags    = true;
+        bool  showOnlineStatus = true;
+    };
+    const AppSettings& GetAppSettings() const { return m_appSettings; }
+
 private:
     void DrawMenuButton();
     void DrawEscapeMenu();
     void DrawHomePage();
     void DrawAuthScreen();   // login / signup card (calls server)
+    void DrawSettingsPanel(); // app-level settings overlay
 
     // 3-D avatar preview (off-screen FBO rendered before ImGui flushes)
     void InitAvatarPreview();
@@ -81,6 +109,47 @@ private:
     GuiGLuint m_avatarEBO     = 0;
     GuiGLuint m_avatarProg    = 0;
 
+    AppSettings m_appSettings;
+    bool        m_settingsOpen = false;
+    int         m_settingsTab  = 0;   // 0=Account 1=Appearance 2=Privacy 3=About
+    void        SaveAppSettings();
+    void        LoadAppSettings();
+
+    // Session players (for pause menu list)
+    std::vector<std::string> m_sessionPlayers;
+
+    // ── Friend system ─────────────────────────────────────────────────────────
+    std::vector<FriendEntry>    m_friends;
+    std::vector<FriendReqEntry> m_friendRequests;
+
+    // Async futures
+    std::future<FriendListResult> m_friendListFuture;
+    std::future<FriendReqsResult> m_friendReqsFuture;
+    std::future<FriendOpResult>   m_friendOpFuture;
+    std::future<JoinFriendResult> m_joinFriendFuture;
+    bool m_friendListInFlight = false;
+    bool m_friendReqsInFlight = false;
+    bool m_friendOpInFlight   = false;
+    bool m_joinInFlight       = false;
+
+    float m_friendRefreshT = 0.f;  // seconds until next auto-refresh
+
+    // Add-friend input (Friends tab)
+    char        m_addFriendBuf[32] = {};
+    std::string m_addFriendStatus;  // "" | "Sent!" | "Error: ..."
+
+    // Per-session tracking so we don't double-send
+    std::set<std::string> m_sentFriendReqs;
+
+    // Override join addr — set by CoreGui when a friend join result arrives
+    bool        m_hasOverrideJoinAddr = false;
+    std::string m_overrideJoinAddr;
+
+    // Helpers
+    void DrawFriendsTab(ImDrawList* cdl, float padX, float W, float sideW);
+    void PollFriendFutures();
+    void KickFriendRefresh();
+
     int  m_sidebarTab          = 0;
     bool m_wantsLeave          = false;
     bool m_gameStarted         = false;
@@ -90,6 +159,7 @@ private:
     bool m_wantsReset          = false;
     bool m_skipEscapeThisFrame = false;
     bool m_connected           = false;
+    bool m_shiftLock           = false;
     int  m_playerCount         = 0;
 
     // Avatar colours
@@ -106,6 +176,19 @@ private:
 
     void SaveAvatar();
     void LoadAvatar();
+
+    // User profile (locally stored, per-account)
+    std::string m_displayName;
+    std::string m_email;
+    std::string m_phoneNumber;
+    bool        m_editingDisplayName = false;
+    bool        m_editingEmail       = false;
+    bool        m_editingPhone       = false;
+    char        m_inputDisplayName[64]  = {};
+    char        m_inputEmail[128]       = {};
+    char        m_inputPhone[32]        = {};
+    void        SaveProfile();
+    void        LoadProfile();
 
     // Nametag data set each frame by Engine
     std::vector<NametagInfo> m_nametags;

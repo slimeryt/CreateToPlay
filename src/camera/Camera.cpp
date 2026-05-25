@@ -19,6 +19,7 @@ void Camera::SetAspect(float aspect) {
     m_projection = glm::perspective(glm::radians(m_fov), aspect, m_near, m_far);
 }
 
+
 void Camera::Zoom(float delta) {
     m_dist -= delta * 1.5f;
     if (m_dist < 2.0f)  m_dist = 2.0f;
@@ -41,8 +42,14 @@ void Camera::FollowTarget(const glm::vec3& targetPos,
     dir.y = std::sin(-m_pitch);
     dir.z = std::cos(m_pitch) * std::cos(m_yaw);
 
-    // Orbit pivot at shoulder height — consistent origin for ray AND camera position
-    glm::vec3 pivot = targetPos + glm::vec3(0.0f, 1.5f, 0.0f);
+    // Snap side offset immediately — shift lock is instant
+    m_sideOffset = m_shiftLock ? 1.75f : 0.0f;
+
+    // Right vector in the XZ plane (perpendicular to camera forward)
+    glm::vec3 right = glm::vec3(std::cos(m_yaw), 0.0f, -std::sin(m_yaw));
+
+    // Orbit pivot at shoulder height, shifted right when in shift-lock mode
+    glm::vec3 pivot   = targetPos + glm::vec3(0.0f, 1.5f, 0.0f) + right * m_sideOffset;
     glm::vec3 desired = pivot + dir * m_dist;
 
     float useDist = m_dist;

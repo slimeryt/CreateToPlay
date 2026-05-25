@@ -1,5 +1,6 @@
 #include "PhysicsWorld.h"
 #include "PhysicsUtils.h"
+#include <algorithm>
 
 void PhysicsWorld::Init() {
     m_config     = std::make_unique<btDefaultCollisionConfiguration>();
@@ -63,6 +64,29 @@ btRigidBody* PhysicsWorld::CreateCapsuleBody(float radius, float height, float m
     btRigidBody* raw = AddBody(shape.get(), mass, pos);
     m_shapes.push_back(std::move(shape));
     return raw;
+}
+
+void PhysicsWorld::RemoveBody(btRigidBody* body) {
+    if (!body) return;
+    m_world->removeRigidBody(body);
+
+    auto it = std::find_if(m_bodies.begin(), m_bodies.end(),
+        [body](const auto& b) { return b.get() == body; });
+    if (it == m_bodies.end()) return;
+
+    // Remove associated motion state
+    btMotionState* ms = (*it)->getMotionState();
+    auto msIt = std::find_if(m_motionStates.begin(), m_motionStates.end(),
+        [ms](const auto& m) { return m.get() == ms; });
+    if (msIt != m_motionStates.end()) m_motionStates.erase(msIt);
+
+    // Remove associated collision shape
+    btCollisionShape* shape = (*it)->getCollisionShape();
+    auto shIt = std::find_if(m_shapes.begin(), m_shapes.end(),
+        [shape](const auto& s) { return s.get() == shape; });
+    if (shIt != m_shapes.end()) m_shapes.erase(shIt);
+
+    m_bodies.erase(it);
 }
 
 float PhysicsWorld::RayCastFraction(const glm::vec3& from, const glm::vec3& to,

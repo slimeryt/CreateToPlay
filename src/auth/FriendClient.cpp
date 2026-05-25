@@ -1,0 +1,229 @@
+#include "FriendClient.h"
+#include <cstdio>
+#include <cstring>
+#include <sstream>
+
+// ── Platform socket boilerplate ───────────────────────────────────────────────
+#ifdef _WIN32
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+using NativeSock = SOCKET;
+static constexpr NativeSock kBad = INVALID_SOCKET;
+static void SockInit()          { WSADATA w; WSAStartup(MAKEWORD(2,2), &w); }
+static void SockCleanup()       { WSACleanup(); }
+static void SockClose(SOCKET s) { closesocket(s); }
+static void SetRecvTimeout(SOCKET s) {
+    DWORD ms = 8000;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+}
+#else
+#  include <sys/socket.h>
+#  include <netdb.h>
+#  include <unistd.h>
+#  include <sys/select.h>
+using NativeSock = int;
+static constexpr NativeSock kBad = -1;
+static void SockInit()    {}
+static void SockCleanup() {}
+static void SockClose(int s) { close(s); }
+static void SetRecvTimeout(int s) {
+    timeval tv{8, 0};
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+#endif
+
+// ── Socket helpers ────────────────────────────────────────────────────────────
+
+static NativeSock FC_Connect(const std::string& host, uint16_t port) {
+    char portStr[8];
+    snprintf(portStr, sizeof(portStr), "%u", port);
+    addrinfo hints{};
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* res = nullptr;
+    if (getaddrinfo(host.c_str(), portStr, &hints, &res) != 0 || !res)
+        return kBad;
+    NativeSock s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (s == kBad) { freeaddrinfo(res); return kBad; }
+    if (connect(s, res->ai_addr, (int)res->ai_addrlen) != 0) {
+        SockClose(s); freeaddrinfo(res); return kBad;
+    }
+    freeaddrinfo(res);
+    SetRecvTimeout(s);
+    return s;
+}
+
+static bool FC_SendLine(NativeSock s, const std::string& line) {
+    std::string msg = line + "\n";
+    int sent = 0, len = (int)msg.size();
+    while (sent < len) {
+#ifdef _WIN32
+        int n = send(s, msg.c_str() + sent, len - sent, 0);
+#else
+        int n = (int)send(s, msg.c_str() + sent, len - sent, 0);
+#endif
+        if (n <= 0) return false;
+        sent += n;
+    }
+    return true;
+}
+
+static bool FC_RecvLine(NativeSock s, std::string& out) {
+    out.clear();
+    char c;
+    while (true) {
+#ifdef _WIN32
+        int n = recv(s, &c, 1, 0);
+#else
+        int n = (int)recv(s, &c, 1, 0);
+#endif
+        if (n <= 0) return false;
+        if (c == '\n') return true;
+        if (c != '\r') out += c;
+    }
+}
+
+// Simple op: send command, read one "OK" or "FAIL reason" line
+static FriendOpResult FC_SimpleOp(const std::string& host, uint16_t port,
+                                   const std::string& cmd) {
+    SockInit();
+    NativeSock s = FC_Connect(host, port);
+    if (s == kBad) { SockCleanup(); return {false, "Could not connect to server"}; }
+
+    if (!FC_SendLine(s, cmd)) {
+        SockClose(s); SockCleanup(); return {false, "Send failed"};
+    }
+
+    std::string resp;
+    if (!FC_RecvLine(s, resp)) {
+        SockClose(s); SockCleanup(); return {false, "No response from server"};
+    }
+
+    SockClose(s); SockCleanup();
+
+    if (resp == "OK" || resp.substr(0, 3) == "OK ") return {true, ""};
+    if (resp.size() > 5 && resp.substr(0, 5) == "FAIL ")
+        return {false, resp.substr(5)};
+    return {false, resp.empty() ? "Unknown error" : resp};
+}
+
+// ── FriendClient methods ──────────────────────────────────────────────────────
+
+FriendOpResult FriendClient::SendRequest(const std::string& host, uint16_t port,
+                                          const std::string& user, const std::string& target) {
+    return FC_SimpleOp(host, port, "FRIEND_REQUEST " + user + " " + target);
+}
+
+FriendOpResult FriendClient::AcceptRequest(const std::string& host, uint16_t port,
+                                            const std::string& user, const std::string& fromUser) {
+    return FC_SimpleOp(host, port, "FRIEND_ACCEPT " + user + " " + fromUser);
+}
+
+FriendOpResult FriendClient::DeclineRequest(const std::string& host, uint16_t port,
+                                             const std::string& user, const std::string& fromUser) {
+    return FC_SimpleOp(host, port, "FRIEND_DECLINE " + user + " " + fromUser);
+}
+
+FriendOpResult FriendClient::RemoveFriend(const std::string& host, uint16_t port,
+                                           const std::string& user, const std::string& target) {
+    return FC_SimpleOp(host, port, "FRIEND_REMOVE " + user + " " + target);
+}
+
+FriendListResult FriendClient::GetFriends(const std::string& host, uint16_t port,
+                                           const std::string& user) {
+    SockInit();
+    NativeSock s = FC_Connect(host, port);
+    if (s == kBad) { SockCleanup(); return {false, {}, "Could not connect to server"}; }
+
+    if (!FC_SendLine(s, "FRIEND_LIST " + user)) {
+        SockClose(s); SockCleanup(); return {false, {}, "Send failed"};
+    }
+
+    std::string first;
+    if (!FC_RecvLine(s, first) || first != "OK") {
+        SockClose(s); SockCleanup();
+        return {false, {}, first.empty() ? "No response" : first};
+    }
+
+    FriendListResult res;
+    res.ok = true;
+    std::string line;
+    while (FC_RecvLine(s, line) && line != "END") {
+        // Format: "username online|offline [gameserver]"
+        std::istringstream ss(line);
+        std::string uname, status, gsrv;
+        ss >> uname >> status >> gsrv;
+        if (uname.empty()) continue;
+        FriendEntry e;
+        e.username   = uname;
+        e.online     = (status == "online");
+        e.inGame     = !gsrv.empty() && gsrv != "-";
+        e.gameServer = e.inGame ? gsrv : "";
+        res.friends.push_back(std::move(e));
+    }
+
+    SockClose(s); SockCleanup();
+    return res;
+}
+
+FriendReqsResult FriendClient::GetRequests(const std::string& host, uint16_t port,
+                                             const std::string& user) {
+    SockInit();
+    NativeSock s = FC_Connect(host, port);
+    if (s == kBad) { SockCleanup(); return {false, {}, "Could not connect to server"}; }
+
+    if (!FC_SendLine(s, "FRIEND_REQS " + user)) {
+        SockClose(s); SockCleanup(); return {false, {}, "Send failed"};
+    }
+
+    std::string first;
+    if (!FC_RecvLine(s, first) || first != "OK") {
+        SockClose(s); SockCleanup();
+        return {false, {}, first.empty() ? "No response" : first};
+    }
+
+    FriendReqsResult res;
+    res.ok = true;
+    std::string line;
+    while (FC_RecvLine(s, line) && line != "END") {
+        // Format: "fromUsername"
+        if (!line.empty())
+            res.requests.push_back({line});
+    }
+
+    SockClose(s); SockCleanup();
+    return res;
+}
+
+JoinFriendResult FriendClient::JoinFriend(const std::string& host, uint16_t port,
+                                           const std::string& user, const std::string& target) {
+    SockInit();
+    NativeSock s = FC_Connect(host, port);
+    if (s == kBad) { SockCleanup(); return {false, "", "Could not connect to server"}; }
+
+    if (!FC_SendLine(s, "FRIEND_JOIN " + user + " " + target)) {
+        SockClose(s); SockCleanup(); return {false, "", "Send failed"};
+    }
+
+    std::string resp;
+    if (!FC_RecvLine(s, resp)) {
+        SockClose(s); SockCleanup(); return {false, "", "No response"};
+    }
+
+    SockClose(s); SockCleanup();
+
+    // "OK host:port"
+    if (resp.size() > 3 && resp.substr(0, 3) == "OK ") {
+        std::string addr = resp.substr(3);
+        if (!addr.empty()) return {true, addr, ""};
+    }
+    if (resp.size() > 5 && resp.substr(0, 5) == "FAIL ")
+        return {false, "", resp.substr(5)};
+    return {false, "", "Friend is not currently in a game"};
+}

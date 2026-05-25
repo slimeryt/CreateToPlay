@@ -36,6 +36,8 @@ target_link_libraries(imgui PUBLIC SDL2::SDL2-static glad opengl32)
 # ── Game client (standalone, no DLL needed) ───────────────────────────────────
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 add_executable(RobloxScratch WIN32 ${SOURCES})
+# Ship as "CreateToPlay.exe"
+set_target_properties(RobloxScratch PROPERTIES OUTPUT_NAME "CreateToPlay")
 
 target_include_directories(RobloxScratch PRIVATE
     src/
@@ -59,6 +61,65 @@ target_link_libraries(RobloxScratch PRIVATE
 # Windows: static SDL2 needs these system libs + WinSock2 for networking
 if(WIN32)
     target_link_libraries(RobloxScratch PRIVATE
+        ws2_32 winmm imm32 version setupapi Cfgmgr32
+    )
+endif()
+
+# ── Copy assets/ next to the exe after every build ───────────────────────────
+add_custom_command(TARGET RobloxScratch POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/assets"
+        "$<TARGET_FILE_DIR:RobloxScratch>/assets"
+    COMMENT "Copying assets → $<TARGET_FILE_DIR:RobloxScratch>/assets"
+)
+
+# ── Install rules — Game component only (excludes Bullet/SDL cmake artifacts) ─
+install(TARGETS RobloxScratch
+    COMPONENT   Game
+    RUNTIME     DESTINATION .)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets/"
+    COMPONENT   Game
+    DESTINATION assets)
+
+# ── CPack: produce CreateToPlay-0.1.0-win64.zip via  cpack -C Release  ────────
+set(CPACK_PACKAGE_NAME        "CreateToPlay")
+set(CPACK_PACKAGE_VERSION     "0.1.0")
+set(CPACK_PACKAGE_FILE_NAME   "CreateToPlay-0.1.0-win64")
+set(CPACK_GENERATOR           "ZIP")
+set(CPACK_COMPONENTS_ALL      "Game")          # only our component, not Bullet/SDL
+set(CPACK_STRIP_FILES         TRUE)            # strip debug symbols from Release exe
+include(CPack)
+
+# ImGuizmo target is provided by FetchContent (ImGuizmo/CMakeLists.txt)
+if(TARGET imguizmo AND TARGET imgui)
+    target_link_libraries(imguizmo PUBLIC imgui)
+endif()
+
+# ── CreateToPlay Studio ───────────────────────────────────────────────────────
+file(GLOB STUDIO_SOURCES "studio/*.cpp")
+# Pull in shared low-level modules (no character / physics / network)
+list(APPEND STUDIO_SOURCES
+    src/core/Window.cpp
+    src/renderer/Mesh.cpp
+    src/renderer/Shader.cpp
+    src/input/InputManager.cpp
+)
+add_executable(CreateToPlayStudio WIN32 ${STUDIO_SOURCES})
+set_target_properties(CreateToPlayStudio PROPERTIES OUTPUT_NAME "CreateToPlayStudio")
+
+target_include_directories(CreateToPlayStudio PRIVATE
+    src/
+    studio/
+    ${imguizmo_SOURCE_DIR}
+    ${CMAKE_BINARY_DIR}/_deps/glad-src/include
+    ${CMAKE_BINARY_DIR}/_deps/glm-src
+)
+target_link_libraries(CreateToPlayStudio PRIVATE
+    SDL2::SDL2-static SDL2::SDL2main
+    glad opengl32 imgui imguizmo
+)
+if(WIN32)
+    target_link_libraries(CreateToPlayStudio PRIVATE
         ws2_32 winmm imm32 version setupapi Cfgmgr32
     )
 endif()

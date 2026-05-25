@@ -6,8 +6,10 @@
 #include <btBulletDynamicsCommon.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <algorithm>
 #include <cstdio>
+#include <cmath>
 #include <string>
 
 bool Engine::Init() {
@@ -98,27 +100,34 @@ void Engine::Run() {
         if (m_coreGui.GameStarted() && !wasGameStarted) {
             wasGameStarted = true;
 
-            // Read server address from assets/server.txt (set this after Railway deploy)
-            // Format: "host:port"  e.g. "your-service.railway.app:12345"
             std::string serverAddr;
-            char* base = SDL_GetBasePath();
-            std::string cfgPath = std::string(base) + "assets/server.txt";
-            SDL_free(base);
 
-            if (FILE* f = fopen(cfgPath.c_str(), "r")) {
-                char line[256] = {};
-                if (fgets(line, sizeof(line), f)) {
-                    // Strip newline
-                    for (char* p = line; *p; ++p)
-                        if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
-                    serverAddr = line;
+            // Join-friend override: CoreGui sets this when JoinFriend result arrives
+            if (m_coreGui.HasOverrideJoinAddr()) {
+                serverAddr = m_coreGui.GetOverrideJoinAddr();
+                m_coreGui.ClearOverrideJoinAddr();
+                printf("[Engine] Joining friend's server: %s\n", serverAddr.c_str());
+            } else {
+                // Read server address from assets/server.txt
+                // Format: "host:port"  e.g. "your-service.railway.app:12345"
+                char* base = SDL_GetBasePath();
+                std::string cfgPath = std::string(base) + "assets/server.txt";
+                SDL_free(base);
+
+                if (FILE* f = fopen(cfgPath.c_str(), "r")) {
+                    char line[256] = {};
+                    if (fgets(line, sizeof(line), f)) {
+                        for (char* p = line; *p; ++p)
+                            if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+                        serverAddr = line;
+                    }
+                    fclose(f);
                 }
-                fclose(f);
-            }
 
-            // Fall back to compiled-in address if no file found
-            if (serverAddr.empty())
-                serverAddr = kEmbeddedServerAddr;
+                // Fall back to compiled-in address if no file found
+                if (serverAddr.empty())
+                    serverAddr = kEmbeddedServerAddr;
+            }
 
             if (!serverAddr.empty()) {
                 std::string host = serverAddr;
@@ -153,6 +162,16 @@ void Engine::Run() {
 
             // Send position + drain server packets every display frame
             m_netClient.Update(m_character.GetPosition(), m_character.GetFacingYaw());
+
+            // Sync player names to CoreGui for the pause-menu player list
+            {
+                std::vector<std::string> players;
+                players.push_back(m_coreGui.GetUsername());  // local player first
+                for (const auto& r : m_netClient.GetRemotePlayers())
+                    if (r.active && !r.name.empty())
+                        players.push_back(r.name);
+                m_coreGui.SetSessionPlayers(std::move(players));
+            }
         }
 
         // ── Aspect ratio / resize ─────────────────────────────────────────────
@@ -183,6 +202,11 @@ void Engine::ProcessEvents() {
 
     if (m_input.IsKeyJustPressed(SDL_SCANCODE_ESCAPE) && !m_coreGui.IsMenuOpen())
         m_coreGui.SetMenuOpen(true);
+
+    // Shift lock toggle — must live here (once per display frame) so the fixed-
+    // update accumulator can't fire it twice in one frame and cancel itself.
+    if (m_input.IsKeyJustPressed(SDL_SCANCODE_LSHIFT) && !m_coreGui.IsMenuOpen())
+        m_controller.ToggleShiftLock();
 
     bool menuOpen = m_coreGui.IsMenuOpen();
     SDL_SetRelativeMouseMode(menuOpen ? SDL_FALSE : SDL_TRUE);
@@ -217,6 +241,98 @@ void Engine::FixedUpdate(float dt) {
     }
 
     m_controller.Update(dt);
+
+    // ── Local character animation ──────────────────────────────────────────────
+    {
+        btVector3 vel = m_character.GetBody()->getLinearVelocity();
+        bool moving   = (vel.x() * vel.x() + vel.z() * vel.z()) > 1.0f;
+        m_character.AdvanceAnimation(dt, moving, vel.y());
+    }
+
+    // ── Remote player smoothing, animation, and collision bodies ──────────────
+    {
+        auto& remotes = m_netClient.GetMutableRemotePlayers();
+        const float alpha = 1.0f - std::exp(-18.0f * dt);
+
+        for (int i = 0; i < NET_MAX_PLAYERS; ++i) {
+            auto& r = remotes[i];
+
+            if (r.active && !m_remoteBodies[i]) {
+                // First time this slot becomes active — snap smooth state to
+                // network position so the player doesn't lerp from the origin.
+                r.smoothPos  = r.pos;
+                r.smoothYaw  = r.yaw;
+                r.smoothVy   = 0.f;
+                r.walkPhase  = 0.f;
+                r.jumpBlend  = 0.f;
+                r.armAirPose = 0.f;
+                r.legAirPose = 0.f;
+
+                // Create kinematic capsule (same proportions as local player)
+                m_remoteBodies[i] = m_physics.CreateCapsuleBody(0.7f, 2.8f, 0.f, r.pos);
+                m_remoteBodies[i]->setCollisionFlags(
+                    m_remoteBodies[i]->getCollisionFlags() |
+                    btCollisionObject::CF_KINEMATIC_OBJECT);
+                m_remoteBodies[i]->setActivationState(DISABLE_DEACTIVATION);
+            } else if (!r.active && m_remoteBodies[i]) {
+                // Player left — destroy their collision body
+                m_physics.RemoveBody(m_remoteBodies[i]);
+                m_remoteBodies[i] = nullptr;
+            }
+
+            if (!r.active) continue;
+
+            // Smooth position
+            glm::vec3 prevSmooth = r.smoothPos;
+            r.smoothPos += (r.pos - r.smoothPos) * alpha;
+
+            // Smooth yaw (take short arc)
+            float yawDiff = r.yaw - r.smoothYaw;
+            while (yawDiff >  3.14159f) yawDiff -= 6.28318f;
+            while (yawDiff < -3.14159f) yawDiff += 6.28318f;
+            r.smoothYaw += yawDiff * alpha;
+
+            // Estimate velocities from smooth position delta
+            glm::vec3 moved = r.smoothPos - prevSmooth;
+            r.smoothVy      = moved.y / dt;
+
+            bool moving = (moved.x * moved.x + moved.z * moved.z) > (0.001f * dt * dt);
+            bool inAir  = std::abs(r.smoothVy) > 2.5f;
+
+            // Walk cycle — only when grounded
+            float groundFactor = 1.0f - r.jumpBlend;
+            if (moving && groundFactor > 0.2f) {
+                r.walkPhase += dt * 7.0f;
+                if (r.walkPhase > 6.28318f) r.walkPhase -= 6.28318f;
+            } else {
+                r.walkPhase *= std::exp(-8.0f * dt);
+            }
+
+            // Air blend
+            float blendRate = inAir ? 14.0f : 9.0f;
+            float blendTgt  = inAir ?  1.0f : 0.0f;
+            r.jumpBlend += (blendTgt - r.jumpBlend) * (1.f - std::exp(-blendRate * dt));
+
+            // Air pose angles
+            bool rising        = r.smoothVy > 2.5f;
+            float armAirTarget = rising ? -0.85f :  0.50f;
+            float legAirTarget = rising ? -0.20f :  0.18f;
+            r.armAirPose += (armAirTarget - r.armAirPose) * (1.f - std::exp(-10.f * dt));
+            r.legAirPose += (legAirTarget - r.legAirPose) * (1.f - std::exp(-10.f * dt));
+
+            // Keep kinematic body in sync with smooth position
+            if (m_remoteBodies[i]) {
+                btTransform t;
+                t.setIdentity();
+                t.setOrigin(btVector3(r.smoothPos.x, r.smoothPos.y, r.smoothPos.z));
+                m_remoteBodies[i]->getMotionState()->setWorldTransform(t);
+            }
+        }
+    }
+
+    // Pass shift-lock state to HUD so it can draw the crosshair dot
+    m_coreGui.SetShiftLock(m_controller.IsShiftLocked());
+
     m_physics.Step(dt);
     m_workspace.UpdateAll();
     m_character.SyncVisuals();
@@ -236,39 +352,63 @@ void Engine::Render() {
         m_camera.UpdateOrbit(m_input.GetMouseDX(), m_input.GetMouseDY());
         m_camera.Zoom(m_input.GetScrollDelta());
     }
+    m_camera.SetShiftLock(m_controller.IsShiftLocked());
     m_camera.FollowTarget(m_character.GetPosition(), &m_physics, m_character.GetBody());
+
+    // Helper: draw one animated R6 character (both shadow + main pass share this logic)
+    // inShadow = true  → color ignored, yaw-overload used for shadow pass
+    // inShadow = false → full colour + quat rotation for proper limb animation
+    auto DrawRemote = [&](const RemotePlayer& r, bool inShadow) {
+        glm::quat facing = glm::angleAxis(r.smoothYaw, glm::vec3(0.f, 1.f, 0.f));
+
+        // Walk swing fades out as the player becomes airborne
+        float groundFactor = 1.0f - r.jumpBlend;
+        float swing        = std::sin(r.walkPhase) * 0.50f * groundFactor;
+
+        static const glm::vec3 kArmPivot[2] = {{-1.12f,  0.84f, 0.f}, { 1.12f,  0.84f, 0.f}};
+        static const glm::vec3 kLegPivot[2] = {{-0.385f,-0.63f, 0.f}, { 0.385f,-0.63f, 0.f}};
+        static const glm::vec3 kArmCtr[2]   = {{-1.12f,  0.14f, 0.f}, { 1.12f,  0.14f, 0.f}};
+        static const glm::vec3 kLegCtr[2]   = {{-0.385f,-1.33f, 0.f}, { 0.385f,-1.33f, 0.f}};
+
+        // Torso + head (no limb rotation)
+        auto P = [&](glm::vec3 loc) { return r.smoothPos + facing * loc; };
+        m_renderer.DrawBox(P({0.f, 0.14f, 0.f}), {1.40f,1.40f,0.70f},
+                           inShadow ? glm::vec3{} : r.shirt, facing);
+        m_renderer.DrawBox(P({0.f, 1.51f, 0.f}), {1.20f,1.20f,1.20f},
+                           inShadow ? glm::vec3{} : r.skin,  facing);
+
+        // Arms — walk: L=+swing R=−swing; air: both → r.armAirPose
+        const float walkSwing[2] = { swing, -swing };
+        for (int i = 0; i < 2; ++i) {
+            float angle    = walkSwing[i] + r.armAirPose * r.jumpBlend;
+            glm::quat rot  = glm::angleAxis(angle, glm::vec3(1,0,0));
+            glm::vec3 lpos = kArmPivot[i] + rot * (kArmCtr[i] - kArmPivot[i]);
+            m_renderer.DrawBox(r.smoothPos + facing * lpos, {0.70f,1.40f,0.70f},
+                               inShadow ? glm::vec3{} : r.skin, facing * rot);
+        }
+
+        // Legs — walk: L=−swing R=+swing; air: both → r.legAirPose
+        const float legWalkSwing[2] = { -swing, swing };
+        for (int i = 0; i < 2; ++i) {
+            float angle    = legWalkSwing[i] + r.legAirPose * r.jumpBlend;
+            glm::quat rot  = glm::angleAxis(angle, glm::vec3(1,0,0));
+            glm::vec3 lpos = kLegPivot[i] + rot * (kLegCtr[i] - kLegPivot[i]);
+            m_renderer.DrawBox(r.smoothPos + facing * lpos, {0.63f,1.40f,0.70f},
+                               inShadow ? glm::vec3{} : r.pants, facing * rot);
+        }
+    };
 
     // ── Shadow pass ───────────────────────────────────────────────────────────
     m_renderer.BeginShadowPass();
     m_workspace.RenderAll(m_renderer);
-    for (const auto& r : m_netClient.GetRemotePlayers()) {
-        if (!r.active) continue;
-        // Rotate local-space offsets by the player's facing yaw so arms/legs
-        // stay attached to the body when the character turns.
-        glm::mat4 rot = glm::rotate(glm::mat4(1.f), r.yaw, glm::vec3(0,1,0));
-        auto W = [&](glm::vec3 local) { return r.pos + glm::vec3(rot * glm::vec4(local, 0.f)); };
-        m_renderer.DrawBox(W({ 0.f,     0.14f,  0.f}), {1.40f,1.40f,0.70f}, {}, r.yaw);
-        m_renderer.DrawBox(W({ 0.f,     1.51f,  0.f}), {1.20f,1.20f,1.20f}, {}, r.yaw);
-        m_renderer.DrawBox(W({-1.12f,   0.14f,  0.f}), {0.70f,1.40f,0.70f}, {}, r.yaw);
-        m_renderer.DrawBox(W({ 1.12f,   0.14f,  0.f}), {0.70f,1.40f,0.70f}, {}, r.yaw);
-        m_renderer.DrawBox(W({-0.385f, -1.33f,  0.f}), {0.63f,1.40f,0.70f}, {}, r.yaw);
-        m_renderer.DrawBox(W({ 0.385f, -1.33f,  0.f}), {0.63f,1.40f,0.70f}, {}, r.yaw);
-    }
+    for (const auto& r : m_netClient.GetRemotePlayers())
+        if (r.active) DrawRemote(r, true);
 
     // ── Main pass ─────────────────────────────────────────────────────────────
     m_renderer.BeginMainPass(m_camera);
     m_workspace.RenderAll(m_renderer);
-    for (const auto& r : m_netClient.GetRemotePlayers()) {
-        if (!r.active) continue;
-        glm::mat4 rot = glm::rotate(glm::mat4(1.f), r.yaw, glm::vec3(0,1,0));
-        auto W = [&](glm::vec3 local) { return r.pos + glm::vec3(rot * glm::vec4(local, 0.f)); };
-        m_renderer.DrawBox(W({ 0.f,     0.14f,  0.f}), {1.40f,1.40f,0.70f}, r.shirt, r.yaw);
-        m_renderer.DrawBox(W({ 0.f,     1.51f,  0.f}), {1.20f,1.20f,1.20f}, r.skin,  r.yaw);
-        m_renderer.DrawBox(W({-1.12f,   0.14f,  0.f}), {0.70f,1.40f,0.70f}, r.skin,  r.yaw);
-        m_renderer.DrawBox(W({ 1.12f,   0.14f,  0.f}), {0.70f,1.40f,0.70f}, r.skin,  r.yaw);
-        m_renderer.DrawBox(W({-0.385f, -1.33f,  0.f}), {0.63f,1.40f,0.70f}, r.pants, r.yaw);
-        m_renderer.DrawBox(W({ 0.385f, -1.33f,  0.f}), {0.63f,1.40f,0.70f}, r.pants, r.yaw);
-    }
+    for (const auto& r : m_netClient.GetRemotePlayers())
+        if (r.active) DrawRemote(r, false);
 
     // ── Post-process ──────────────────────────────────────────────────────────
     m_renderer.EndFrame();

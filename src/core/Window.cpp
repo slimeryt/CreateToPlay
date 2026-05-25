@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <cstdio>
 
-bool Window::Init(const std::string& title, int width, int height) {
+bool Window::Init(const std::string& title, int width, int height, bool relativeMouse) {
     m_width  = width;
     m_height = height;
 
@@ -43,7 +43,9 @@ bool Window::Init(const std::string& title, int width, int height) {
     }
 
     SDL_GL_SetSwapInterval(1); // vsync
-    SDL_SetRelativeMouseMode(SDL_TRUE);
+    SDL_SetRelativeMouseMode(relativeMouse ? SDL_TRUE : SDL_FALSE);
+    if (!relativeMouse)
+        SDL_ShowCursor(SDL_ENABLE);
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);

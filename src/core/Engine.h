@@ -35,5 +35,8 @@ private:
 
     bool m_running = false;
 
+    // Kinematic collision bodies for remote players (null = slot unused)
+    btRigidBody* m_remoteBodies[NET_MAX_PLAYERS] = {};
+
     static constexpr float kFixedDt = 1.0f / 60.0f;
 };

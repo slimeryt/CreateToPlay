@@ -5,7 +5,7 @@
 
 class Window {
 public:
-    bool Init(const std::string& title, int width, int height);
+    bool Init(const std::string& title, int width, int height, bool relativeMouse = true);
     void Shutdown();
     void SwapBuffers();
 

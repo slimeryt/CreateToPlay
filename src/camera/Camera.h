@@ -20,6 +20,9 @@ public:
     const glm::vec3& GetPosition()   const { return m_position; }
     float            GetYaw()        const { return m_yaw; }
 
+    // Enable/disable over-the-shoulder offset for shift lock
+    void SetShiftLock(bool on) { m_shiftLock = on; }
+
 private:
     glm::mat4 m_view       = glm::mat4(1.0f);
     glm::mat4 m_projection = glm::mat4(1.0f);
@@ -32,5 +35,7 @@ private:
     float m_near      = 0.1f;
     float m_far       = 1000.0f;
     float m_aspect    = 16.0f / 9.0f;
-    float m_sensitivity = 0.003f;
+    float m_sensitivity  = 0.003f;
+    bool  m_shiftLock    = false;
+    float m_sideOffset   = 0.0f;   // smoothed right-shift (studs), lerped each FollowTarget call
 };

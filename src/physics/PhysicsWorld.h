@@ -15,6 +15,9 @@ public:
     btRigidBody* CreateCapsuleBody(float radius, float height, float mass,
                                     const glm::vec3& pos = glm::vec3(0.0f));
 
+    // Remove a body that was created via Create*Body and free its resources.
+    void RemoveBody(btRigidBody* body);
+
     bool RayCast(const glm::vec3& from, const glm::vec3& to,
                  btCollisionObject** hitOut = nullptr) const;
 

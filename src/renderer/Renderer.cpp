@@ -4,6 +4,7 @@
 #include "embedded/EmbeddedAssets.h"
 #include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 // ── Lighting constants ────────────────────────────────────────────────────────
 static const glm::vec3 kLightDir    = glm::normalize(glm::vec3(0.8f, 1.6f, 0.5f));
@@ -231,6 +232,24 @@ void Renderer::DrawBox(glm::vec3 pos, glm::vec3 size, glm::vec3 color,
                        float yaw, float reflectance) {
     glm::mat4 model = glm::translate(glm::mat4(1.f), pos);
     model = glm::rotate(model, yaw, glm::vec3(0.f, 1.f, 0.f));
+    model = glm::scale(model, size);
+
+    if (m_inShadow) {
+        m_shadowShader.SetMat4("uModel", model);
+    } else {
+        glm::mat3 nm = glm::transpose(glm::inverse(glm::mat3(model)));
+        m_phongShader.SetMat4("uModel",        model);
+        m_phongShader.SetMat3("uNormalMatrix", nm);
+        m_phongShader.SetVec3("uObjectColor",  color);
+        m_phongShader.SetFloat("uReflectance", reflectance);
+    }
+    m_cube.Draw();
+}
+
+void Renderer::DrawBox(glm::vec3 pos, glm::vec3 size, glm::vec3 color,
+                       const glm::quat& rotation, float reflectance) {
+    glm::mat4 model = glm::translate(glm::mat4(1.f), pos);
+    model = model * glm::mat4_cast(rotation);
     model = glm::scale(model, size);
 
     if (m_inShadow) {

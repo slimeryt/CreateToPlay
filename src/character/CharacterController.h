@@ -12,6 +12,9 @@ public:
 
     void Update(float dt);
 
+    void ToggleShiftLock()        { m_shiftLock = !m_shiftLock; }
+    bool IsShiftLocked() const    { return m_shiftLock; }
+
 private:
     bool IsGrounded() const;
 
@@ -25,4 +28,5 @@ private:
     static constexpr float kGroundRange = 2.45f;
 
     float m_targetFacingYaw = 0.0f;
+    bool  m_shiftLock       = false;
 };

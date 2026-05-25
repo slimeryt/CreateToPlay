@@ -25,12 +25,21 @@ static constexpr NativeSocket kInvalidSocket = -1;
 struct RemotePlayer {
     bool        active = false;
     uint8_t     id     = 0;
-    glm::vec3   pos    = {};
+    glm::vec3   pos    = {};       // raw network position (latest snapshot)
     float       yaw    = 0.f;
     glm::vec3   skin   = {0.976f, 0.820f, 0.173f};
     glm::vec3   shirt  = {0.059f, 0.420f, 0.690f};
     glm::vec3   pants  = {0.110f, 0.529f, 0.047f};
     std::string name;
+
+    // Smoothed values — updated each FixedUpdate in Engine (not in NetClient)
+    glm::vec3   smoothPos  = {};
+    float       smoothYaw  = 0.f;
+    float       smoothVy   = 0.f;  // estimated vertical velocity (for air animation)
+    float       walkPhase  = 0.f;  // animation cycle (radians)
+    float       jumpBlend  = 0.f;  // 0 = grounded, 1 = in air
+    float       armAirPose = 0.f;  // blended arm air angle
+    float       legAirPose = 0.f;  // blended leg air angle
 };
 
 class NetClient {
@@ -52,6 +61,10 @@ public:
     uint8_t MyId()        const { return m_myId; }
 
     const std::array<RemotePlayer, NET_MAX_PLAYERS>& GetRemotePlayers() const {
+        return m_remote;
+    }
+    // Mutable access so Engine can write smoothPos / smoothYaw / walkPhase
+    std::array<RemotePlayer, NET_MAX_PLAYERS>& GetMutableRemotePlayers() {
         return m_remote;
     }
 

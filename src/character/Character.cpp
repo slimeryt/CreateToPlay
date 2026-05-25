@@ -6,6 +6,7 @@
 #include <btBulletDynamicsCommon.h>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
 
 // Roblox R6 proportions scaled to our 3-unit capsule (capsule center = local origin).
 // Ground is at -1.5, capsule top at +1.5.
@@ -67,12 +68,71 @@ void Character::SetAvatar(const AvatarConfig& cfg) {
     if (m_visualParts[5]) m_visualParts[5]->color = cfg.pants;
 }
 
+void Character::AdvanceAnimation(float dt, bool moving, float vertVel) {
+    constexpr float kPi2 = 6.28318f;
+
+    // ── Air blend ──────────────────────────────────────────────────────────────
+    // Consider airborne when vertical speed exceeds a small threshold
+    bool inAir       = std::abs(vertVel) > 2.5f;
+    float blendRate  = inAir ? 14.0f : 9.0f;   // pop into air fast, ease out on land
+    float blendTgt   = inAir ? 1.0f  : 0.0f;
+    m_jumpBlend += (blendTgt - m_jumpBlend) * (1.f - std::exp(-blendRate * dt));
+
+    // ── Air pose targets ───────────────────────────────────────────────────────
+    // Jump (rising):  arms swept back, legs slightly back
+    // Fall (falling): arms forward/out, legs hanging forward
+    bool rising       = vertVel > 2.5f;
+    float armTarget   = rising ? -0.85f :  0.50f;
+    float legTarget   = rising ? -0.20f :  0.18f;
+    float poseRate    = 10.0f;
+    m_armAirPose += (armTarget - m_armAirPose) * (1.f - std::exp(-poseRate * dt));
+    m_legAirPose += (legTarget - m_legAirPose) * (1.f - std::exp(-poseRate * dt));
+
+    // ── Walk cycle (only advances when grounded) ───────────────────────────────
+    float groundFactor = 1.0f - m_jumpBlend;
+    if (moving && groundFactor > 0.2f) {
+        m_walkPhase += dt * 7.0f;
+        if (m_walkPhase > kPi2) m_walkPhase -= kPi2;
+    } else {
+        m_walkPhase *= std::exp(-8.0f * dt);
+    }
+}
+
 void Character::SyncVisuals() {
     glm::vec3 capsulePos = GetPosition();
     glm::quat facingRot  = glm::angleAxis(m_facingYaw, glm::vec3(0, 1, 0));
 
-    for (int i = 0; i < 6; ++i) {
+    // Walk swing fades to zero as we become airborne
+    float groundFactor = 1.0f - m_jumpBlend;
+    float swing        = std::sin(m_walkPhase) * 0.50f * groundFactor;
+
+    // ── Static parts: torso (0), head (1) ─────────────────────────────────────
+    for (int i = 0; i < 2; ++i) {
         m_visualParts[i]->position = capsulePos + facingRot * kPartDefs[i].offset;
         m_visualParts[i]->rotation = facingRot;
+    }
+
+    // ── Arms (2 = L, 3 = R) — pivot at shoulder ───────────────────────────────
+    // Walk: L swings +, R swings −.  Air: both go to same symmetric pose.
+    static const glm::vec3 kArmPivot[2] = {{-1.12f, 0.84f, 0.f}, {1.12f, 0.84f, 0.f}};
+    const float walkSwing[2] = { swing, -swing };
+    for (int i = 0; i < 2; ++i) {
+        float angle    = walkSwing[i] + m_armAirPose * m_jumpBlend;
+        glm::quat rot  = glm::angleAxis(angle, glm::vec3(1, 0, 0));
+        glm::vec3 lpos = kArmPivot[i] + rot * (kPartDefs[2 + i].offset - kArmPivot[i]);
+        m_visualParts[2 + i]->position = capsulePos + facingRot * lpos;
+        m_visualParts[2 + i]->rotation = facingRot * rot;
+    }
+
+    // ── Legs (4 = L, 5 = R) — pivot at hip ────────────────────────────────────
+    // Walk: L swings −, R swings +.  Air: both go to same symmetric pose.
+    static const glm::vec3 kLegPivot[2] = {{-0.385f, -0.63f, 0.f}, {0.385f, -0.63f, 0.f}};
+    const float legWalkSwing[2] = { -swing, swing };
+    for (int i = 0; i < 2; ++i) {
+        float angle    = legWalkSwing[i] + m_legAirPose * m_jumpBlend;
+        glm::quat rot  = glm::angleAxis(angle, glm::vec3(1, 0, 0));
+        glm::vec3 lpos = kLegPivot[i] + rot * (kPartDefs[4 + i].offset - kLegPivot[i]);
+        m_visualParts[4 + i]->position = capsulePos + facingRot * lpos;
+        m_visualParts[4 + i]->rotation = facingRot * rot;
     }
 }
