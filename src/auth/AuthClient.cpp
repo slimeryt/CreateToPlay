@@ -18,9 +18,9 @@ static constexpr NativeSock kBad = INVALID_SOCKET;
 static void SockInit()         { WSADATA w; WSAStartup(MAKEWORD(2,2), &w); }
 static void SockCleanup()      { WSACleanup(); }
 static void SockClose(SOCKET s){ closesocket(s); }
-// 5-second recv timeout
+// 10-second recv timeout (generous for Railway cold-starts)
 static void SetRecvTimeout(SOCKET s) {
-    DWORD ms = 5000;
+    DWORD ms = 10000;
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
 }
 #else
@@ -34,7 +34,7 @@ static void SockInit()    {}
 static void SockCleanup() {}
 static void SockClose(int s) { close(s); }
 static void SetRecvTimeout(int s) {
-    timeval tv{5, 0};
+    timeval tv{10, 0};   // 10-second timeout
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 }
 #endif
@@ -120,7 +120,7 @@ AuthResult AuthClient::Send(uint8_t type,
     if (!RecvExact(s, hdrBuf, 2)) {
         SockClose(s);
         SockCleanup();
-        return {false, "Server did not respond (timeout)"};
+        return {false, "Server did not respond — try again in a moment"};
     }
     uint16_t payloadLen = ReadU16BE(hdrBuf);
 

@@ -318,6 +318,10 @@ int main() {
                         uint16_t plen = ReadU16BE(c.buf.data());
                         if ((int)c.buf.size() < 2 + plen) break;
                         ProcessPayload(i, c.buf.data() + 2, plen);
+                        // ProcessPayload may have disconnected this client
+                        // (auth packets call DisconnectClient which clears buf).
+                        // Guard the erase so we never operate on an empty vector.
+                        if (!c.active) break;
                         c.buf.erase(c.buf.begin(), c.buf.begin() + 2 + plen);
                     }
                 }
