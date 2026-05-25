@@ -1,0 +1,8 @@
+[build]
+dockerfilePath = "server/Dockerfile"
+
+[deploy]
+startCommand = "GameServer"
+
+[[services]]
+name = "createtoplay-server"
