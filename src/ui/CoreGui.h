@@ -29,9 +29,6 @@ public:
     bool WantsReset()    const { return m_wantsReset; }
     void ClearReset()          { m_wantsReset = false; }
 
-    // Server address typed on the home page — "" means offline / solo play
-    const char* GetServerAddr() const { return m_serverAddr; }
-
 private:
     void DrawMenuButton();
     void DrawEscapeMenu();
@@ -48,5 +45,4 @@ private:
     bool m_wantsReset          = false;
     bool m_skipEscapeThisFrame = false;
 
-    char m_serverAddr[128]     = {};   // "host:port" or "host" or empty
 };

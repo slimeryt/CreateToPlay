@@ -96,18 +96,37 @@ void Engine::Run() {
         // ── Connect to server when game first starts ──────────────────────────
         if (m_coreGui.GameStarted() && !wasGameStarted) {
             wasGameStarted = true;
-            const char* addr = m_coreGui.GetServerAddr();
-            if (addr && addr[0] != '\0') {
-                // Parse "host:port" or plain "host"
-                std::string addrStr(addr);
-                std::string host = addrStr;
-                uint16_t    port = NET_DEFAULT_PORT;
-                auto colon = addrStr.rfind(':');
-                if (colon != std::string::npos) {
-                    host = addrStr.substr(0, colon);
-                    port = (uint16_t)std::stoi(addrStr.substr(colon + 1));
+
+            // Read server address from assets/server.txt (set this after Railway deploy)
+            // Format: "host:port"  e.g. "your-service.railway.app:12345"
+            std::string serverAddr;
+            char* base = SDL_GetBasePath();
+            std::string cfgPath = std::string(base) + "assets/server.txt";
+            SDL_free(base);
+
+            if (FILE* f = fopen(cfgPath.c_str(), "r")) {
+                char line[256] = {};
+                if (fgets(line, sizeof(line), f)) {
+                    // Strip newline
+                    for (char* p = line; *p; ++p)
+                        if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+                    serverAddr = line;
                 }
+                fclose(f);
+            }
+
+            if (!serverAddr.empty()) {
+                std::string host = serverAddr;
+                uint16_t    port = NET_DEFAULT_PORT;
+                auto colon = serverAddr.rfind(':');
+                if (colon != std::string::npos) {
+                    host = serverAddr.substr(0, colon);
+                    port = (uint16_t)std::stoi(serverAddr.substr(colon + 1));
+                }
+                printf("[Engine] Connecting to server: %s:%u\n", host.c_str(), port);
                 m_netClient.Connect(host, port);
+            } else {
+                printf("[Engine] No server.txt found — offline/solo mode\n");
             }
         }
 

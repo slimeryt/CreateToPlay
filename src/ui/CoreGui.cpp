@@ -388,7 +388,7 @@ void CoreGui::DrawHomePage() {
         // Single game card
         const float cw     = 280.f;
         const float thumbH = cw * 0.58f;
-        const float infoH  = 110.f;  // name + server input + play button
+        const float infoH  = 82.f;   // name + play button
         const float ch     = thumbH + infoH;
         const float corner = 10.f;
         const float cardY  = 30.f + ImGui::GetTextLineHeight() + 22.f;
@@ -416,21 +416,7 @@ void CoreGui::DrawHomePage() {
         ImGui::SetCursorPos({padX + 12.f, cardY + thumbH + 12.f});
         ImGui::TextColored({1.f, 1.f, 1.f, 1.f}, "Test");
 
-        // Server address input (always visible under name)
-        {
-            float inputW = cw - 24.f;
-            ImGui::SetCursorPos({padX + 12.f, cardY + thumbH + 32.f});
-            ImGui::SetNextItemWidth(inputW);
-            ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0.10f, 0.10f, 0.16f, 1.f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.14f, 0.14f, 0.22f, 1.f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  ImVec4(0.16f, 0.16f, 0.26f, 1.f));
-            ImGui::PushStyleColor(ImGuiCol_Text,           ImVec4(0.80f, 0.80f, 0.90f, 1.f));
-            ImGui::InputTextWithHint("##srv", "Server IP:port  (blank = offline)",
-                m_serverAddr, sizeof(m_serverAddr));
-            ImGui::PopStyleColor(4);
-        }
-
-        // Play button — appears below server input on hover
+        // Play button — appears on hover
         if (cardHov) {
             float pbW   = cw - 24.f;
             float pbH   = 34.f;
