@@ -49,8 +49,9 @@ private:
 
     // Async connection during loading screen
     std::future<bool> m_connectFuture;
-    bool              m_connectInFlight = false;
-    float             m_loadMinTimer    = 0.f;  // minimum loading time (seconds)
+    bool              m_connectInFlight  = false;
+    float             m_loadMinTimer     = 0.f;  // minimum loading time (seconds)
+    float             m_connectTimeout   = 0.f;  // max time to wait for connect (seconds)
     std::string       m_pendingServerAddr;       // stored while connecting
 
     static constexpr float kFixedDt = 1.0f / 60.0f;

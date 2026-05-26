@@ -140,6 +140,7 @@ void Engine::Run() {
 
             // Connect on a background thread so the loading screen stays animated
             m_connectInFlight = true;
+            m_connectTimeout  = 7.f;   // give up after 7 s, enter offline mode
             std::string addr  = serverAddr;
             NetClient*  nc    = &m_netClient;
             m_connectFuture   = std::async(std::launch::async, [nc, addr]() -> bool {
@@ -157,22 +158,26 @@ void Engine::Run() {
 
         // ── Poll async connect + enforce minimum loading time ─────────────────
         if (m_connectInFlight) {
-            m_loadMinTimer -= frame;
-            if (m_connectFuture.valid() &&
-                m_connectFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-            {
+            m_loadMinTimer   -= frame;
+            m_connectTimeout -= frame;
+
+            bool futureReady = m_connectFuture.valid() &&
+                m_connectFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            bool timedOut    = (m_connectTimeout <= 0.f);
+
+            if (futureReady) {
                 bool ok = m_connectFuture.get();
                 m_connectInFlight = false;
                 if (!ok) printf("[Engine] Server connection failed — offline/solo mode\n");
-
-                // Wait for minimum display time before entering game
-                if (m_loadMinTimer <= 0.f) {
-                    m_coreGui.SetLoading(false);
-                    m_coreGui.SetGameStarted();
-                }
-                // else: loading timer still running — SetGameStarted fires below
+            } else if (timedOut) {
+                // TCP connect is hanging (server down / unreachable) — give up and
+                // enter offline mode. The background thread keeps running until it
+                // eventually times out at the OS level; we just stop waiting for it.
+                printf("[Engine] Connection timed out — entering offline/solo mode\n");
+                m_connectInFlight = false;
             }
-            // Connection done but minimum timer still running
+
+            // Transition to game once connect is resolved and minimum time passed
             if (!m_connectInFlight && m_loadMinTimer <= 0.f && m_coreGui.IsLoading()) {
                 m_coreGui.SetLoading(false);
                 m_coreGui.SetGameStarted();
