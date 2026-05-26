@@ -137,7 +137,7 @@ void NetClient::Update(const glm::vec3& localPos, float localYaw) {
     pkt.y   = localPos.y;
     pkt.z   = localPos.z;
     pkt.yaw = localYaw;
-    SendRaw(&pkt, sizeof(pkt));
+    if (!SendRaw(&pkt, sizeof(pkt))) return;  // disconnected mid-send
 
     Poll();
 }
@@ -145,11 +145,26 @@ void NetClient::Update(const glm::vec3& localPos, float localYaw) {
 // ── Internal: send ────────────────────────────────────────────────────────────
 
 bool NetClient::SendRaw(const void* data, int len) {
+    if (m_sock == kInvalidSocket) return false;
     uint8_t hdr[2];
     WriteU16BE(hdr, (uint16_t)len);
-    send(m_sock, (const char*)hdr,  2,   0);
-    send(m_sock, (const char*)data, len, 0);
-    return true;
+
+    // Check send errors — a failure means the server dropped / reset the connection.
+    // WOULDBLOCK is the only non-fatal error (buffer full); everything else disconnects.
+    auto doSend = [&](const void* buf, int sz) -> bool {
+        int r = send(m_sock, (const char*)buf, sz, 0);
+        if (r > 0) return true;
+#ifdef _WIN32
+        if (WSAGetLastError() == WSAEWOULDBLOCK) return true;
+#else
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return true;
+#endif
+        printf("[Net] Send error — server disconnected\n");
+        Disconnect();
+        return false;
+    };
+
+    return doSend(hdr, 2) && doSend(data, len);
 }
 
 // ── Internal: receive + parse ─────────────────────────────────────────────────
