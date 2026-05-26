@@ -3699,23 +3699,43 @@ void CoreGui::RenderLoadingScreen() {
     const float cx = W * 0.5f;
     const float cy = H * 0.5f;
 
-    // ── Game icon centered on screen ──────────────────────────────────────────
+    // ── Game icon ─────────────────────────────────────────────────────────────
+    const float iconSz = 160.f;
+    const float iconY  = cy - iconSz * 0.5f - 28.f;   // shift up to make room below
     {
-        const float cw = 160.f, ch = 160.f;
-        float tlX = cx - cw * 0.5f, tlY = cy - ch * 0.5f;
-        ImVec2 tl = {tlX, tlY}, br = {tlX + cw, tlY + ch};
+        ImVec2 tl = {cx - iconSz * 0.5f, iconY};
+        ImVec2 br = {cx + iconSz * 0.5f, iconY + iconSz};
 
         dl->AddRectFilled(tl, br, IM_COL32(30, 65, 130, 255), 18.f);
         dl->AddRect      (tl, br, IM_COL32(55, 95, 175, 180), 18.f, 0, 1.5f);
 
-        // Game name centred inside the icon
+        // "T" initial centred inside icon (placeholder thumbnail)
+        ImGui::PushFont(m_fontTitle);
+        const char* ini = "T";
+        ImVec2 isz = ImGui::CalcTextSize(ini);
+        dl->AddText(m_fontTitle, 48.f,
+                    {cx - isz.x * 0.5f, iconY + iconSz * 0.5f - isz.y * 0.5f},
+                    IM_COL32(255, 255, 255, 180), ini);
+        ImGui::PopFont();
+    }
+
+    // ── Game name below icon ──────────────────────────────────────────────────
+    {
         ImGui::PushFont(m_fontTitle);
         const char* title = "Test";
         ImVec2 tsz = ImGui::CalcTextSize(title);
         dl->AddText(m_fontTitle, 30.f,
-                    {cx - tsz.x * 0.5f, cy - tsz.y * 0.5f},
-                    IM_COL32(255, 255, 255, 220), title);
+                    {cx - tsz.x * 0.5f, iconY + iconSz + 14.f},
+                    IM_COL32(230, 230, 240, 230), title);
         ImGui::PopFont();
+    }
+
+    // ── "Connecting to server..." below name ──────────────────────────────────
+    {
+        const char* sub = "Connecting to server...";
+        ImVec2 ssz = ImGui::CalcTextSize(sub);
+        dl->AddText({cx - ssz.x * 0.5f, iconY + iconSz + 14.f + 36.f},
+                    IM_COL32(120, 120, 145, 180), sub);
     }
 
     ImGui::End();
