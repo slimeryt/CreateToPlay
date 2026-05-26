@@ -48,6 +48,9 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
     // 3-D avatar preview FBO
     InitAvatarPreview();
 
+    // Kick an immediate server-reachability check so maintenance screen shows fast
+    // (must run after m_authHost / m_authPort are resolved, see block below)
+
     // Read server address for auth (same source as game connection)
     {
         std::string serverAddr;
@@ -103,6 +106,9 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
             LoadProfile();
         }
     }
+
+    // Initial server reachability check — shows maintenance screen if server is down
+    KickServerCheck();
 }
 
 void CoreGui::SaveSession() {
@@ -311,6 +317,130 @@ void CoreGui::PollFriendFutures() {
             m_cachedServerStatus   = std::move(res);
         }
     }
+}
+
+// ── Server reachability / maintenance mode ────────────────────────────────────
+
+void CoreGui::KickServerCheck() {
+    if (m_serverCheckInFlight || m_authHost.empty()) return;
+    m_serverCheckInFlight = true;
+    m_serverCheckRetryT   = 0.f;
+    std::string host = m_authHost;
+    uint16_t    port = m_authPort;
+    m_serverCheckFuture = std::async(std::launch::async,
+        [host, port]() -> ServerStatusResult {
+            return FriendClient().GetServerStatus(host, port);
+        });
+}
+
+void CoreGui::PollServerCheck() {
+    float dt = ImGui::GetIO().DeltaTime;
+    if (m_serverCheckInFlight && m_serverCheckFuture.valid()) {
+        if (m_serverCheckFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            auto res = m_serverCheckFuture.get();
+            m_serverCheckInFlight = false;
+            if (!m_serverReachable && res.ok)
+                printf("[CoreGui] Server is back online.\n");
+            else if (m_serverReachable && !res.ok)
+                printf("[CoreGui] Server is unreachable — maintenance mode.\n");
+            m_serverReachable   = res.ok;
+            // Re-check sooner while down, less often while up
+            m_serverCheckRetryT = m_serverReachable ? 60.f : 15.f;
+        }
+    }
+    if (!m_serverCheckInFlight) {
+        m_serverCheckRetryT -= dt;
+        if (m_serverCheckRetryT <= 0.f) KickServerCheck();
+    }
+}
+
+void CoreGui::DrawMaintenanceScreen() {
+    ImGuiIO& io = ImGui::GetIO();
+    const float W = io.DisplaySize.x;
+    const float H = io.DisplaySize.y;
+
+    // Opaque full-screen background — covers everything below
+    ImGui::SetNextWindowPos({0.f, 0.f});
+    ImGui::SetNextWindowSize({W, H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.08f, 1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {0.f, 0.f});
+    ImGui::Begin("##maintenance", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    const float cardW = 480.f, cardH = 300.f;
+    const float cx    = W * 0.5f;
+    const float cy    = H * 0.5f;
+    const float cardX = cx - cardW * 0.5f;
+    const float cardY = cy - cardH * 0.5f;
+
+    // ── Card background ───────────────────────────────────────────────────────
+    dl->AddRectFilled({cardX, cardY}, {cardX + cardW, cardY + cardH},
+        IM_COL32(10, 10, 16, 255), 16.f);
+    dl->AddRect({cardX, cardY}, {cardX + cardW, cardY + cardH},
+        IM_COL32(38, 38, 60, 200), 16.f, 0, 1.2f);
+
+    // ── Warning triangle icon ─────────────────────────────────────────────────
+    const float iconCX = cx;
+    const float iconCY = cardY + 74.f;
+    const float triR   = 30.f;
+    ImVec2 triTop = {iconCX,                   iconCY - triR};
+    ImVec2 triBL  = {iconCX - triR * 0.866f,  iconCY + triR * 0.5f};
+    ImVec2 triBR  = {iconCX + triR * 0.866f,  iconCY + triR * 0.5f};
+
+    dl->AddTriangleFilled(triTop, triBL, triBR, IM_COL32(240, 168, 28, 235));
+    dl->AddTriangle      (triTop, triBL, triBR, IM_COL32(255, 200, 80, 120), 1.5f);
+
+    // "!" exclamation mark inside triangle
+    dl->AddRectFilled(
+        {iconCX - 2.2f, iconCY - triR * 0.40f},
+        {iconCX + 2.2f, iconCY + triR * 0.05f},
+        IM_COL32(18, 12, 2, 255), 1.f);
+    dl->AddCircleFilled({iconCX, iconCY + triR * 0.24f}, 2.6f, IM_COL32(18, 12, 2, 255));
+
+    // ── Title ─────────────────────────────────────────────────────────────────
+    const float titleY = cardY + 126.f;
+    ImGui::PushFont(m_fontTitle);
+    const char* titleStr = "Under Maintenance";
+    ImVec2 tsz = ImGui::CalcTextSize(titleStr);
+    dl->AddText(m_fontTitle, 30.f,
+                {cx - tsz.x * 0.5f, titleY},
+                IM_COL32(240, 240, 255, 255), titleStr);
+    ImGui::PopFont();
+
+    // ── Subtitle ──────────────────────────────────────────────────────────────
+    const char* sub = "We're making improvements. Check back soon.";
+    ImVec2 ssz = ImGui::CalcTextSize(sub);
+    dl->AddText({cx - ssz.x * 0.5f, titleY + 44.f},
+                IM_COL32(128, 128, 152, 218), sub);
+
+    // ── Retry button ──────────────────────────────────────────────────────────
+    const float btnW = 130.f, btnH = 36.f;
+    const float btnX = cx - btnW * 0.5f;
+    const float btnY = cardY + cardH - btnH - 22.f;
+
+    ImGui::SetCursorScreenPos({btnX, btnY});
+    ImGui::PushStyleColor(ImGuiCol_Button,        {0.11f, 0.36f, 0.94f, 1.f});
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.22f, 0.48f, 1.00f, 1.f});
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.07f, 0.26f, 0.80f, 1.f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
+
+    bool retryClicked = ImGui::Button(
+        m_serverCheckInFlight ? "Checking..." : "Retry",
+        {btnW, btnH});
+
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+
+    if (retryClicked && !m_serverCheckInFlight) KickServerCheck();
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }
 
 // ── 3-D avatar preview ────────────────────────────────────────────────────────
@@ -1081,6 +1211,16 @@ void CoreGui::DrawEscapeMenu() {
 // ── Home page ─────────────────────────────────────────────────────────────────
 
 void CoreGui::RenderHomePage() {
+    PollServerCheck();
+
+    // If server is unreachable, show maintenance screen over everything
+    if (!m_serverReachable) {
+        DrawMaintenanceScreen();
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        return;
+    }
+
     DrawHomePage();
     DrawToasts();
     ImGui::Render();

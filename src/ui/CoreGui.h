@@ -124,6 +124,7 @@ private:
     void DrawProfilePage();         // standalone own-profile full-screen page
     void DrawFriendProfilePage();   // standalone friend-profile full-screen page
     void DrawServerBrowser();       // full-screen server info panel
+    void DrawMaintenanceScreen();   // full-screen maintenance overlay (server down)
     void DrawToasts();              // floating toast notifications (foreground draw list)
     void DrawChat();                // in-game chat overlay
 
@@ -183,6 +184,12 @@ private:
     std::future<ServerStatusResult> m_serverStatusFuture;
     ServerStatusResult m_cachedServerStatus;
 
+    // ── Maintenance mode (server reachability) ────────────────────────────────
+    bool   m_serverReachable     = true;   // optimistic — no flash on fast connections
+    bool   m_serverCheckInFlight = false;
+    float  m_serverCheckRetryT   = 0.f;
+    std::future<ServerStatusResult> m_serverCheckFuture;
+
     // ── Toast notifications ───────────────────────────────────────────────────
     struct Toast {
         std::string text, sub;
@@ -225,6 +232,10 @@ private:
     void DrawFriendsTab(ImDrawList* cdl, float padX, float W, float sideW);
     void PollFriendFutures();
     void KickFriendRefresh();
+
+    // Server reachability (maintenance mode)
+    void KickServerCheck();
+    void PollServerCheck();
 
     int  m_sidebarTab          = 0;
     bool m_wantsLeave          = false;
