@@ -229,9 +229,8 @@ private:
     int  m_sidebarTab          = 0;
     bool m_wantsLeave          = false;
     bool m_wantsJoin           = false;   // set when Play clicked; Engine clears it
-    bool m_loading             = false;   // loading screen active
-    float m_loadProgress       = 0.f;    // 0-1 animated bar
-    float m_loadSpinAngle      = 0.f;    // spinner rotation
+    bool  m_loading      = false;   // loading screen active
+    float m_loadProgress = 0.f;    // kept for ClearLeave compat
     bool m_gameStarted         = false;
     bool m_menuOpen            = false;
     bool m_leaveConfirmOpen    = false;
