@@ -3971,27 +3971,29 @@ void CoreGui::DrawChat() {
     }
 
     // Input bar (only visible when chat is open)
+    // IMPORTANT: background must be part of the window, NOT the foreground draw
+    // list — foreground renders after all windows and would paint over the text.
     if (m_chatOpen) {
-        // Dim background for the input
-        fdl->AddRectFilled(
-            {marginX - 4.f,    inputY - 2.f},
-            {marginX + chatW,  inputY + inputH + 2.f},
-            IM_COL32(8, 8, 16, 200), 8.f);
-        fdl->AddRect(
-            {marginX - 4.f,    inputY - 2.f},
-            {marginX + chatW,  inputY + inputH + 2.f},
-            IM_COL32(50, 80, 200, 180), 8.f, 0, 1.f);
+        const float winPadX = 8.f;
+        const float winPadY = 6.f;
 
-        // Invisible window to host InputText
-        ImGui::SetNextWindowPos({marginX, inputY});
-        ImGui::SetNextWindowSize({chatW + 4.f, inputH});
-        ImGui::PushStyleColor(ImGuiCol_WindowBg,       {0.f, 0.f, 0.f, 0.f});
-        ImGui::PushStyleColor(ImGuiCol_FrameBg,        {0.f, 0.f, 0.f, 0.f});
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, {0.f, 0.f, 0.f, 0.f});
-        ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  {0.f, 0.f, 0.f, 0.f});
-        ImGui::PushStyleColor(ImGuiCol_Text,           {0.92f, 0.92f, 1.f, 1.f});
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {0.f, 4.f});
+        ImGui::SetNextWindowPos({marginX - winPadX, inputY - winPadY});
+        ImGui::SetNextWindowSize({chatW + winPadX * 2.f, inputH + winPadY * 2.f});
+
+        // Window background IS the dark pill — no foreground draw list needed
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,       {0.03f, 0.03f, 0.09f, 0.90f});
+        ImGui::PushStyleColor(ImGuiCol_Border,         {0.20f, 0.32f, 0.80f, 0.70f});
+        // FrameBg: slightly lighter than window so the text field is distinct
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,        {0.07f, 0.07f, 0.15f, 1.00f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, {0.09f, 0.09f, 0.18f, 1.00f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  {0.05f, 0.05f, 0.12f, 1.00f});
+        // Text must be light — this is what makes the typed characters visible
+        ImGui::PushStyleColor(ImGuiCol_Text,           {0.93f, 0.93f, 1.00f, 1.00f});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,   8.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {winPadX, winPadY});
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,    6.f);
+
         ImGui::Begin("##chatinput", nullptr,
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoSavedSettings |
@@ -4012,7 +4014,7 @@ void CoreGui::DrawChat() {
         }
 
         ImGui::End();
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(5);
+        ImGui::PopStyleVar(4);
+        ImGui::PopStyleColor(6);
     }
 }
