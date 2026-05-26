@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cmath>
 #include <string>
+#include <future>
 
 bool Engine::Init() {
     // 1. Window
@@ -71,7 +72,6 @@ void Engine::Run() {
     Uint64 last  = SDL_GetPerformanceCounter();
     Uint64 freq  = SDL_GetPerformanceFrequency();
     float  accum = 0.0f;
-    bool   wasGameStarted = false;
 
     while (m_running) {
         Uint64 now   = SDL_GetPerformanceCounter();
@@ -85,6 +85,8 @@ void Engine::Run() {
         // ── Handle Leave ──────────────────────────────────────────────────────
         if (m_coreGui.WantsLeave()) {
             m_netClient.Disconnect();
+            m_connectInFlight = false;
+            m_coreGui.SetLoading(false);
             btRigidBody* body = m_character.GetBody();
             btTransform t; t.setIdentity();
             t.setOrigin(btVector3(0.f, 5.f, 0.f));
@@ -94,27 +96,24 @@ void Engine::Run() {
             body->setAngularVelocity(btVector3(0,0,0));
             m_character.SetFacingYaw(0.f);
             m_coreGui.ClearLeave();
-            wasGameStarted = false;
         }
 
-        // ── Connect to server when game first starts ──────────────────────────
-        if (m_coreGui.GameStarted() && !wasGameStarted) {
-            wasGameStarted = true;
+        // ── WantsJoin: resolve server address then kick async connect ─────────
+        if (m_coreGui.WantsJoin()) {
+            m_coreGui.ClearWantsJoin();
+            m_coreGui.SetLoading(true);
+            m_loadMinTimer = 2.0f;  // show loading screen for at least 2 seconds
 
+            // Resolve server address
             std::string serverAddr;
-
-            // Join-friend override: CoreGui sets this when JoinFriend result arrives
             if (m_coreGui.HasOverrideJoinAddr()) {
                 serverAddr = m_coreGui.GetOverrideJoinAddr();
                 m_coreGui.ClearOverrideJoinAddr();
                 printf("[Engine] Joining friend's server: %s\n", serverAddr.c_str());
             } else {
-                // Read server address from assets/server.txt
-                // Format: "host:port"  e.g. "your-service.railway.app:12345"
                 char* base = SDL_GetBasePath();
                 std::string cfgPath = std::string(base) + "assets/server.txt";
                 SDL_free(base);
-
                 if (FILE* f = fopen(cfgPath.c_str(), "r")) {
                     char line[256] = {};
                     if (fgets(line, sizeof(line), f)) {
@@ -124,32 +123,58 @@ void Engine::Run() {
                     }
                     fclose(f);
                 }
+                if (serverAddr.empty()) serverAddr = kEmbeddedServerAddr;
+            }
+            m_pendingServerAddr = serverAddr;
 
-                // Fall back to compiled-in address if no file found
-                if (serverAddr.empty())
-                    serverAddr = kEmbeddedServerAddr;
+            // Push name + avatar so they're included in PKT_JOIN
+            m_netClient.SetLocalName(m_coreGui.GetUsername());
+            {
+                const float* s  = m_coreGui.GetAvatarSkin();
+                const float* sh = m_coreGui.GetAvatarShirt();
+                const float* pa = m_coreGui.GetAvatarPants();
+                m_netClient.SetLocalAvatar(
+                    {s[0],s[1],s[2]}, {sh[0],sh[1],sh[2]}, {pa[0],pa[1],pa[2]});
             }
 
-            if (!serverAddr.empty()) {
-                std::string host = serverAddr;
+            // Connect on a background thread so the loading screen stays animated
+            m_connectInFlight = true;
+            std::string addr  = serverAddr;
+            NetClient*  nc    = &m_netClient;
+            m_connectFuture   = std::async(std::launch::async, [nc, addr]() -> bool {
+                std::string host = addr;
                 uint16_t    port = NET_DEFAULT_PORT;
-                auto colon = serverAddr.rfind(':');
+                auto colon = addr.rfind(':');
                 if (colon != std::string::npos) {
-                    host = serverAddr.substr(0, colon);
-                    port = (uint16_t)std::stoi(serverAddr.substr(colon + 1));
-                }
-                // Push name + avatar colours so they're included in PKT_JOIN
-                m_netClient.SetLocalName(m_coreGui.GetUsername());
-                {
-                    const float* s  = m_coreGui.GetAvatarSkin();
-                    const float* sh = m_coreGui.GetAvatarShirt();
-                    const float* pa = m_coreGui.GetAvatarPants();
-                    m_netClient.SetLocalAvatar({s[0],s[1],s[2]}, {sh[0],sh[1],sh[2]}, {pa[0],pa[1],pa[2]});
+                    host = addr.substr(0, colon);
+                    port = (uint16_t)std::stoi(addr.substr(colon + 1));
                 }
                 printf("[Engine] Connecting to server: %s:%u\n", host.c_str(), port);
-                m_netClient.Connect(host, port);
-            } else {
-                printf("[Engine] No server.txt found — offline/solo mode\n");
+                return nc->Connect(host, port);
+            });
+        }
+
+        // ── Poll async connect + enforce minimum loading time ─────────────────
+        if (m_connectInFlight) {
+            m_loadMinTimer -= frame;
+            if (m_connectFuture.valid() &&
+                m_connectFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            {
+                bool ok = m_connectFuture.get();
+                m_connectInFlight = false;
+                if (!ok) printf("[Engine] Server connection failed — offline/solo mode\n");
+
+                // Wait for minimum display time before entering game
+                if (m_loadMinTimer <= 0.f) {
+                    m_coreGui.SetLoading(false);
+                    m_coreGui.SetGameStarted();
+                }
+                // else: loading timer still running — SetGameStarted fires below
+            }
+            // Connection done but minimum timer still running
+            if (!m_connectInFlight && m_loadMinTimer <= 0.f && m_coreGui.IsLoading()) {
+                m_coreGui.SetLoading(false);
+                m_coreGui.SetGameStarted();
             }
         }
 
@@ -395,6 +420,15 @@ void Engine::FixedUpdate(float dt) {
 }
 
 void Engine::Render() {
+    if (m_coreGui.IsLoading()) {
+        glClearColor(0.05f, 0.05f, 0.08f, 1.f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        m_coreGui.BeginFrame();
+        m_coreGui.RenderLoadingScreen();
+        m_window.SwapBuffers();
+        return;
+    }
+
     if (!m_coreGui.GameStarted()) {
         glClearColor(0.07f, 0.07f, 0.10f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);

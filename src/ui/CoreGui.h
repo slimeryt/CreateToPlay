@@ -24,6 +24,17 @@ public:
     void RenderHomePage();  // lobby screen (before game starts)
 
     bool GameStarted()   const { return m_gameStarted; }
+
+    // Loading screen — shown between pressing Join and the game actually starting
+    bool WantsJoin()     const { return m_wantsJoin; }
+    void ClearWantsJoin()      { m_wantsJoin = false; }
+    bool IsLoading()     const { return m_loading; }
+    void SetLoading(bool on)   { m_loading = on; if (!on) m_loadProgress = 0.f; }
+    void SetGameStarted()      { m_gameStarted = true; }
+    // Call each frame while loading to advance the animated progress bar
+    void TickLoading(float dt);
+    void RenderLoadingScreen();
+
     bool IsMenuOpen()    const { return m_menuOpen; }
     void SetMenuOpen(bool open) {
         if (open && !m_menuOpen) m_skipEscapeThisFrame = true;
@@ -34,6 +45,9 @@ public:
     void ClearLeave() {
         m_wantsLeave       = false;
         m_gameStarted      = false;
+        m_loading          = false;
+        m_loadProgress     = 0.f;
+        m_wantsJoin        = false;
         m_menuOpen         = false;
         m_leaveConfirmOpen = false;
     }
@@ -214,6 +228,10 @@ private:
 
     int  m_sidebarTab          = 0;
     bool m_wantsLeave          = false;
+    bool m_wantsJoin           = false;   // set when Play clicked; Engine clears it
+    bool m_loading             = false;   // loading screen active
+    float m_loadProgress       = 0.f;    // 0-1 animated bar
+    float m_loadSpinAngle      = 0.f;    // spinner rotation
     bool m_gameStarted         = false;
     bool m_menuOpen            = false;
     bool m_leaveConfirmOpen    = false;

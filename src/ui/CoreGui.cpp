@@ -289,7 +289,7 @@ void CoreGui::PollFriendFutures() {
             if (res.ok && !res.serverAddr.empty()) {
                 m_hasOverrideJoinAddr = true;
                 m_overrideJoinAddr    = res.serverAddr;
-                m_gameStarted         = true;   // trigger Engine game-start path
+                m_wantsJoin           = true;   // triggers loading screen → game start
             } else {
                 m_addFriendStatus = "Join failed: " + res.error;
             }
@@ -1340,8 +1340,8 @@ void CoreGui::DrawHomePage() {
 
             if (ImGui::IsMouseClicked(0)) {
                 if (btnHov) {
-                    // Play button — instant join
-                    m_gameStarted = true;
+                    // Play button — trigger loading screen → join
+                    m_wantsJoin = true;
                 } else {
                     // Clicked elsewhere on card while hovered — open server info
                     m_serverBrowserOpen = true;
@@ -3672,6 +3672,156 @@ void CoreGui::DrawAuthScreen() {
     ImGui::PopStyleColor(5);
 }
 
+// ── Loading screen ────────────────────────────────────────────────────────────
+
+void CoreGui::TickLoading(float dt) {
+    // Spin the arc
+    m_loadSpinAngle += dt * 220.f;   // degrees per second
+    if (m_loadSpinAngle >= 360.f) m_loadSpinAngle -= 360.f;
+
+    // Progress bar eases toward 0.85 during connection, then jumps to 1 when done
+    float target = m_gameStarted ? 1.f : 0.82f;
+    float speed  = m_gameStarted ? 6.f : 0.35f;
+    m_loadProgress += (target - m_loadProgress) * (1.f - std::exp(-speed * dt));
+    if (m_loadProgress > 1.f) m_loadProgress = 1.f;
+}
+
+void CoreGui::RenderLoadingScreen() {
+    TickLoading(ImGui::GetIO().DeltaTime);
+
+    ImGuiIO& io = ImGui::GetIO();
+    const float W = io.DisplaySize.x;
+    const float H = io.DisplaySize.y;
+
+    // Full-screen overlay
+    ImGui::SetNextWindowPos({0.f, 0.f});
+    ImGui::SetNextWindowSize({W, H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.08f, 1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {0.f, 0.f});
+    ImGui::Begin("##loading", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float cx = W * 0.5f;
+    const float cy = H * 0.5f;
+
+    // ── Background subtle grid ────────────────────────────────────────────────
+    {
+        float gs = 48.f;
+        ImU32 gc = IM_COL32(255, 255, 255, 8);
+        for (float x = 0; x < W; x += gs) dl->AddLine({x, 0}, {x, H}, gc, 1.f);
+        for (float y = 0; y < H; y += gs) dl->AddLine({0, y}, {W, y}, gc, 1.f);
+    }
+
+    // ── Game thumbnail card (centered upper half) ─────────────────────────────
+    {
+        const float cw = 320.f, ch = 180.f;
+        float tlX = cx - cw * 0.5f, tlY = cy - ch - 80.f;
+        ImVec2 tl = {tlX, tlY}, br = {tlX + cw, tlY + ch};
+
+        // Card shadow
+        dl->AddRectFilled({tl.x + 6.f, tl.y + 6.f}, {br.x + 6.f, br.y + 6.f},
+                          IM_COL32(0, 0, 0, 90), 14.f);
+        // Card background (blue gradient-ish)
+        dl->AddRectFilled(tl, br, IM_COL32(30, 65, 130, 255), 14.f);
+        // Subtle highlight strip at top
+        dl->AddRectFilled(tl, {br.x, tl.y + 40.f},
+                          IM_COL32(60, 110, 200, 60), 14.f, ImDrawFlags_RoundCornersTop);
+        // Card border
+        dl->AddRect(tl, br, IM_COL32(60, 100, 200, 120), 14.f, 0, 1.5f);
+
+        // Game name inside card
+        ImGui::PushFont(m_fontTitle);
+        const char* title = "Test";
+        ImVec2 tsz = ImGui::CalcTextSize(title);
+        dl->AddText(m_fontTitle, 30.f,
+                    {cx - tsz.x * 0.5f, tlY + ch - tsz.y - 16.f},
+                    IM_COL32(255, 255, 255, 230), title);
+        ImGui::PopFont();
+    }
+
+    // ── Spinner ───────────────────────────────────────────────────────────────
+    {
+        const float spinY  = cy + 10.f;
+        const float radius = 22.f;
+        const float thick  = 3.5f;
+        const int   segs   = 48;
+
+        // Track circle (dim)
+        dl->AddCircle({cx, spinY}, radius, IM_COL32(255,255,255,25), segs, thick);
+
+        // Spinning arc — 270° arc starting at m_loadSpinAngle
+        const float arcSpan  = 270.f * 3.14159f / 180.f;
+        const float startRad = m_loadSpinAngle * 3.14159f / 180.f;
+        const int   arcSegs  = 36;
+        for (int i = 0; i < arcSegs; ++i) {
+            float a0 = startRad + (float)i     / arcSegs * arcSpan;
+            float a1 = startRad + (float)(i+1) / arcSegs * arcSpan;
+            // Fade the tail of the arc
+            float alpha = (float)(i + 1) / arcSegs;
+            ImU32 col = IM_COL32(
+                (int)(28  + alpha * (80  - 28)),
+                (int)(92  + alpha * (200 - 92)),
+                (int)(240 + alpha * (255 - 240)),
+                (int)(180 + alpha * 75));
+            dl->AddLine(
+                {cx + std::cos(a0) * radius, spinY + std::sin(a0) * radius},
+                {cx + std::cos(a1) * radius, spinY + std::sin(a1) * radius},
+                col, thick);
+        }
+        // Bright tip dot
+        float tipA = startRad + arcSpan;
+        dl->AddCircleFilled(
+            {cx + std::cos(tipA) * radius, spinY + std::sin(tipA) * radius},
+            thick * 0.9f, IM_COL32(120, 210, 255, 255));
+    }
+
+    // ── Status text ───────────────────────────────────────────────────────────
+    {
+        const char* msg = m_gameStarted ? "Starting..." : "Connecting...";
+        ImVec2 tsz = ImGui::CalcTextSize(msg);
+        dl->AddText({cx - tsz.x * 0.5f, cy + 48.f},
+                    IM_COL32(160, 180, 220, 200), msg);
+    }
+
+    // ── Progress bar ─────────────────────────────────────────────────────────
+    {
+        const float barW = 260.f, barH = 4.f;
+        float bx = cx - barW * 0.5f, by = cy + 76.f;
+
+        // Track
+        dl->AddRectFilled({bx, by}, {bx + barW, by + barH},
+                          IM_COL32(255, 255, 255, 22), barH * 0.5f);
+        // Fill
+        float fill = m_loadProgress * barW;
+        if (fill > 1.f)
+            dl->AddRectFilled({bx, by}, {bx + fill, by + barH},
+                              IM_COL32(60, 160, 255, 220), barH * 0.5f);
+        // Glow tip
+        if (fill > 2.f)
+            dl->AddCircleFilled({bx + fill, by + barH * 0.5f},
+                                barH * 1.2f, IM_COL32(140, 210, 255, 180));
+    }
+
+    // ── "CreateToPlay" watermark bottom-center ────────────────────────────────
+    {
+        const char* wm = "CreateToPlay";
+        ImVec2 tsz = ImGui::CalcTextSize(wm);
+        dl->AddText({cx - tsz.x * 0.5f, H - 32.f},
+                    IM_COL32(80, 80, 110, 160), wm);
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
 // ── Server Browser ────────────────────────────────────────────────────────────
 
 void CoreGui::DrawServerBrowser() {
@@ -3780,7 +3930,7 @@ void CoreGui::DrawServerBrowser() {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
         if (ImGui::Button("Play##sbjoin", {btnW, btnH})) {
             m_serverBrowserOpen = false;
-            m_gameStarted       = true;
+            m_wantsJoin         = true;
         }
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
