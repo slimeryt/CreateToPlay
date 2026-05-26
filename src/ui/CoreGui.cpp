@@ -1338,17 +1338,22 @@ void CoreGui::DrawHomePage() {
                 {cx + ts * 1.0f,  cy},
                 IM_COL32(255, 255, 255, 255));
 
-            if (btnHov && ImGui::IsMouseClicked(0)) {
-                m_serverBrowserOpen = true;
-                // Kick a fresh server status fetch
-                if (!m_serverStatusInFlight) {
-                    m_serverStatusInFlight = true;
-                    m_cachedServerStatus   = {};  // reset
-                    std::string host = m_authHost; uint16_t port = m_authPort;
-                    m_serverStatusFuture = std::async(std::launch::async,
-                        [host, port]() -> ServerStatusResult {
-                            return FriendClient().GetServerStatus(host, port);
-                        });
+            if (ImGui::IsMouseClicked(0)) {
+                if (btnHov) {
+                    // Play button — instant join
+                    m_gameStarted = true;
+                } else {
+                    // Clicked elsewhere on card while hovered — open server info
+                    m_serverBrowserOpen = true;
+                    if (!m_serverStatusInFlight) {
+                        m_serverStatusInFlight = true;
+                        m_cachedServerStatus   = {};
+                        std::string host = m_authHost; uint16_t port = m_authPort;
+                        m_serverStatusFuture = std::async(std::launch::async,
+                            [host, port]() -> ServerStatusResult {
+                                return FriendClient().GetServerStatus(host, port);
+                            });
+                    }
                 }
             }
         }
