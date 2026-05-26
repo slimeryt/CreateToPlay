@@ -20,6 +20,7 @@ enum PacketType : uint8_t {
     PKT_LOGIN     = 7,   // client → server: login
     PKT_AUTH_OK   = 8,   // server → client: auth success
     PKT_AUTH_FAIL = 9,   // server → client: auth failure + reason
+    PKT_CHAT      = 0x10, // client → server → all: chat message
 };
 
 // ── Packet bodies (after the 2-byte length prefix) ────────────────────────────
@@ -88,6 +89,13 @@ struct PktAuthOk {
 struct PktAuthFail {
     uint8_t type = PKT_AUTH_FAIL;
     char    reason[48] = {};
+};
+
+// PKT_CHAT  payload = 1 + 20 + 80 = 101 bytes
+struct PktChat {
+    uint8_t type = PKT_CHAT;
+    char    name[20] = {};   // sender's display name
+    char    msg[80]  = {};   // message text (null-terminated)
 };
 
 #pragma pack(pop)

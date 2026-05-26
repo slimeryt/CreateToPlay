@@ -303,6 +303,14 @@ void CoreGui::PollFriendFutures() {
             if (res.ok) m_cachedFriendProfile = std::move(res);
         }
     }
+    // Server status fetch
+    if (m_serverStatusInFlight && m_serverStatusFuture.valid()) {
+        if (m_serverStatusFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            auto res = m_serverStatusFuture.get();
+            m_serverStatusInFlight = false;
+            m_cachedServerStatus   = std::move(res);
+        }
+    }
 }
 
 // ── 3-D avatar preview ────────────────────────────────────────────────────────
@@ -683,6 +691,10 @@ void CoreGui::Render() {
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
     }
+
+    // ── Chat + toasts (always on top) ──────────────────────────────────────────
+    DrawChat();
+    DrawToasts();
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -1070,6 +1082,7 @@ void CoreGui::DrawEscapeMenu() {
 
 void CoreGui::RenderHomePage() {
     DrawHomePage();
+    DrawToasts();
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
@@ -1099,6 +1112,12 @@ void CoreGui::DrawHomePage() {
     // Friend profile page — viewing another player's public info
     if (m_friendProfileOpen) {
         DrawFriendProfilePage();
+        return;
+    }
+
+    // Server browser — shown when user clicks Play
+    if (m_serverBrowserOpen) {
+        DrawServerBrowser();
         return;
     }
 
@@ -1319,8 +1338,19 @@ void CoreGui::DrawHomePage() {
                 {cx + ts * 1.0f,  cy},
                 IM_COL32(255, 255, 255, 255));
 
-            if (btnHov && ImGui::IsMouseClicked(0))
-                m_gameStarted = true;
+            if (btnHov && ImGui::IsMouseClicked(0)) {
+                m_serverBrowserOpen = true;
+                // Kick a fresh server status fetch
+                if (!m_serverStatusInFlight) {
+                    m_serverStatusInFlight = true;
+                    m_cachedServerStatus   = {};  // reset
+                    std::string host = m_authHost; uint16_t port = m_authPort;
+                    m_serverStatusFuture = std::async(std::launch::async,
+                        [host, port]() -> ServerStatusResult {
+                            return FriendClient().GetServerStatus(host, port);
+                        });
+                }
+            }
         }
 
     } else if (m_sidebarTab == 2) {
@@ -3635,4 +3665,353 @@ void CoreGui::DrawAuthScreen() {
     ImGui::End();
     ImGui::PopStyleVar(6);
     ImGui::PopStyleColor(5);
+}
+
+// ── Server Browser ────────────────────────────────────────────────────────────
+
+void CoreGui::DrawServerBrowser() {
+    ImGuiIO& io = ImGui::GetIO();
+    const float W = io.DisplaySize.x;
+    const float H = io.DisplaySize.y;
+
+    ImGui::SetNextWindowPos({0.f, 0.f});
+    ImGui::SetNextWindowSize({W, H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.07f, 0.10f, 1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
+    ImGui::Begin("##serverbrowser", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoSavedSettings);
+
+    ImDrawList* dl   = ImGui::GetWindowDrawList();
+    const float padX = 60.f;
+    const float padY = 40.f;
+
+    // Back button top-left
+    ImGui::SetCursorPos({padX, padY});
+    ImGui::PushStyleColor(ImGuiCol_Button,        {0.12f, 0.12f, 0.18f, 1.f});
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.20f, 0.20f, 0.30f, 1.f});
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.08f, 0.08f, 0.14f, 1.f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
+    if (ImGui::Button("< Back", {80.f, 32.f})) {
+        m_serverBrowserOpen = false;
+    }
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+
+    // Title
+    ImGui::SetCursorPos({padX, padY + 50.f});
+    ImGui::PushFont(m_fontTitle);
+    ImGui::TextColored({0.88f, 0.88f, 0.94f, 1.f}, "Test");
+    ImGui::PopFont();
+
+    // Server info card
+    const float cardW = 380.f;
+    const float cardH = 240.f;
+    const float cardX = padX;
+    const float cardY = padY + 50.f + ImGui::GetTextLineHeightWithSpacing() + 18.f;
+
+    ImVec2 cardTL = {cardX, cardY};
+    ImVec2 cardBR = {cardX + cardW, cardY + cardH};
+
+    dl->AddRectFilled(cardTL, cardBR, IM_COL32(13, 13, 22, 255), 12.f);
+    dl->AddRect      (cardTL, cardBR, IM_COL32(40, 40, 68, 180),  12.f, 0, 1.f);
+
+    // Thumbnail strip
+    ImVec2 thumbBR = {cardBR.x, cardTL.y + 100.f};
+    dl->AddRectFilled(cardTL, thumbBR, IM_COL32(30, 70, 130, 255), 12.f, ImDrawFlags_RoundCornersTop);
+
+    // Game name in thumbnail
+    {
+        const char* lbl = "Test";
+        ImVec2 tsz = ImGui::CalcTextSize(lbl);
+        dl->AddText({cardTL.x + 14.f, cardTL.y + 100.f - tsz.y - 10.f},
+                    IM_COL32(255, 255, 255, 240), lbl);
+    }
+
+    // Player count / status
+    {
+        float iy = cardTL.y + 110.f;
+        float ix = cardTL.x + 18.f;
+
+        if (m_serverStatusInFlight) {
+            dl->AddText({ix, iy}, IM_COL32(160, 160, 180, 200), "Fetching server info...");
+        } else if (!m_cachedServerStatus.ok) {
+            dl->AddText({ix, iy}, IM_COL32(180, 80, 80, 240), "Server unavailable");
+            iy += ImGui::GetTextLineHeightWithSpacing() + 4.f;
+            if (!m_cachedServerStatus.error.empty())
+                dl->AddText({ix, iy}, IM_COL32(130, 130, 150, 200),
+                            m_cachedServerStatus.error.c_str());
+        } else {
+            // Players online
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Players online:  %d / %d",
+                     m_cachedServerStatus.playerCount,
+                     m_cachedServerStatus.maxPlayers);
+            dl->AddText({ix, iy}, IM_COL32(200, 220, 255, 230), buf);
+            iy += ImGui::GetTextLineHeightWithSpacing() + 4.f;
+
+            // Server indicator dot
+            bool available = m_cachedServerStatus.maxPlayers > 0 &&
+                             m_cachedServerStatus.playerCount < m_cachedServerStatus.maxPlayers;
+            ImU32 dotCol = available ? IM_COL32(60, 210, 90, 255) : IM_COL32(220, 60, 60, 255);
+            dl->AddCircleFilled({ix + 6.f, iy + 8.f}, 5.f, dotCol);
+            dl->AddText({ix + 16.f, iy}, available ? IM_COL32(90, 220, 110, 230) : IM_COL32(220, 90, 90, 230),
+                        available ? "Server open" : "Server full");
+        }
+    }
+
+    // Buttons row at bottom of card
+    {
+        const float btnH = 38.f;
+        const float btnY = cardBR.y - btnH - 14.f;
+        const float btnW = (cardW - 18.f * 3.f) * 0.5f;
+
+        // Play button
+        ImGui::SetCursorScreenPos({cardTL.x + 14.f, btnY});
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.11f, 0.36f, 0.94f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.20f, 0.48f, 1.00f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.08f, 0.27f, 0.70f, 1.f});
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
+        if (ImGui::Button("Play##sbjoin", {btnW, btnH})) {
+            m_serverBrowserOpen = false;
+            m_gameStarted       = true;
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+
+        // Refresh button
+        ImGui::SameLine(0.f, 14.f);
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.12f, 0.12f, 0.20f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.20f, 0.20f, 0.32f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.08f, 0.08f, 0.15f, 1.f});
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
+        bool refreshClicked = ImGui::Button("Refresh##sbref", {btnW, btnH});
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+
+        if (refreshClicked && !m_serverStatusInFlight) {
+            m_serverStatusInFlight = true;
+            m_cachedServerStatus   = {};
+            std::string host = m_authHost; uint16_t port = m_authPort;
+            m_serverStatusFuture = std::async(std::launch::async,
+                [host, port]() -> ServerStatusResult {
+                    return FriendClient().GetServerStatus(host, port);
+                });
+        }
+    }
+
+    // Close on Escape
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        m_serverBrowserOpen = false;
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+// ── Toast notifications ────────────────────────────────────────────────────────
+
+void CoreGui::PushToast(const std::string& text, const std::string& sub,
+                        float life, ImU32 iconColor) {
+    // Cap queue
+    while (m_toasts.size() >= 5) m_toasts.pop_front();
+    Toast t;
+    t.text      = text;
+    t.sub       = sub;
+    t.life      = life;
+    t.iconColor = iconColor;
+    m_toasts.push_back(std::move(t));
+}
+
+void CoreGui::DrawToasts() {
+    ImGuiIO& io = ImGui::GetIO();
+    float dt    = io.DeltaTime;
+
+    // Advance ages + remove expired
+    for (auto& t : m_toasts) t.age += dt;
+    while (!m_toasts.empty() && m_toasts.front().age >= m_toasts.front().life)
+        m_toasts.pop_front();
+
+    if (m_toasts.empty()) return;
+
+    ImDrawList* fdl = ImGui::GetForegroundDrawList();
+
+    const float toastW   = 300.f;
+    const float toastH   = 52.f;
+    const float padH     = 8.f;
+    const float rightMgn = 16.f;
+    const float botMgn   = 16.f;
+    const float slideSpd = 0.15f;   // fraction of width to slide in
+    const float fadeFrac = 0.3f;    // last 30% of life used to fade out
+
+    float baseX = io.DisplaySize.x - toastW - rightMgn;
+    float baseY = io.DisplaySize.y - botMgn;
+
+    // Draw newest on bottom
+    for (int i = (int)m_toasts.size() - 1; i >= 0; --i) {
+        const Toast& t = m_toasts[i];
+        float lifeRatio = 1.f - t.age / t.life;
+
+        // Slide in from right at birth
+        float slideRatio = t.age / (t.life * slideSpd);
+        if (slideRatio > 1.f) slideRatio = 1.f;
+        float slideOffset = (1.f - slideRatio) * toastW;
+
+        // Fade out near end of life
+        float alpha = 1.f;
+        if (lifeRatio < fadeFrac) alpha = lifeRatio / fadeFrac;
+        if (slideRatio < 1.f)    alpha *= slideRatio;
+        alpha = alpha < 0.f ? 0.f : (alpha > 1.f ? 1.f : alpha);
+
+        float tX  = baseX + slideOffset;
+        float tY  = baseY - toastH;
+        baseY    -= (toastH + padH);
+
+        ImVec2 tTL = {tX,           tY};
+        ImVec2 tBR = {tX + toastW,  tY + toastH};
+
+        auto Fade = [&](ImU32 col) -> ImU32 {
+            int a = (int)(((col >> 24) & 0xFF) * alpha);
+            return (col & 0x00FFFFFF) | ((ImU32)a << 24);
+        };
+
+        // Card background
+        fdl->AddRectFilled(tTL, tBR, Fade(IM_COL32(14, 14, 22, 230)), 10.f);
+        fdl->AddRect      (tTL, tBR, Fade(IM_COL32(55, 55, 90, 200)), 10.f, 0, 1.f);
+
+        // Accent left bar
+        fdl->AddRectFilled({tTL.x, tTL.y + 6.f}, {tTL.x + 3.f, tBR.y - 6.f},
+                           Fade(t.iconColor), 2.f);
+
+        // Icon circle
+        float icX = tTL.x + 20.f;
+        float icY = tTL.y + toastH * 0.5f;
+        fdl->AddCircleFilled({icX, icY}, 8.f, Fade(t.iconColor), 16);
+        fdl->AddText({icX - 3.5f, icY - 5.5f}, Fade(IM_COL32(255, 255, 255, 255)), "i");
+
+        // Text
+        float txX = tTL.x + 36.f;
+        float txY = t.sub.empty()
+            ? tTL.y + (toastH - ImGui::GetTextLineHeight()) * 0.5f
+            : tTL.y + 8.f;
+        fdl->AddText({txX, txY}, Fade(IM_COL32(230, 230, 248, 255)), t.text.c_str());
+        if (!t.sub.empty())
+            fdl->AddText({txX, txY + ImGui::GetTextLineHeightWithSpacing()},
+                         Fade(IM_COL32(140, 140, 165, 220)), t.sub.c_str());
+    }
+}
+
+// ── In-game chat ───────────────────────────────────────────────────────────────
+
+void CoreGui::AddChatMessage(const std::string& name, const std::string& text) {
+    ChatEntry e;
+    e.name = name;
+    e.text = text;
+    e.age  = 0.f;
+    m_chatLog.push_back(std::move(e));
+    while (m_chatLog.size() > 50) m_chatLog.pop_front();
+}
+
+void CoreGui::DrawChat() {
+    if (!m_gameStarted) return;  // only in-game
+
+    ImGuiIO& io = ImGui::GetIO();
+    float dt    = io.DeltaTime;
+    for (auto& e : m_chatLog) e.age += dt;
+
+    const float chatW   = 340.f;
+    const float entryH  = ImGui::GetTextLineHeightWithSpacing();
+    const float maxH    = 180.f;
+    const float inputH  = 34.f;
+    const float marginX = 12.f;
+    const float marginY = 12.f;
+    const float inputY  = io.DisplaySize.y - marginY - inputH;
+    const float logY    = inputY - 8.f;  // messages render upward from here
+    const float fadeSec = 8.f;  // fade out after 8s when chat is closed
+
+    ImDrawList* fdl = ImGui::GetForegroundDrawList();
+
+    // Render recent messages above the input bar
+    {
+        int count = (int)m_chatLog.size();
+        int maxVis = (int)(maxH / entryH);
+        int start  = count - maxVis;
+        if (start < 0) start = 0;
+
+        float cy = logY;
+        for (int i = count - 1; i >= start; --i) {
+            const ChatEntry& e = m_chatLog[i];
+            float alpha = 1.f;
+            if (!m_chatOpen && e.age > fadeSec)
+                alpha = 0.f;
+            else if (!m_chatOpen && e.age > fadeSec - 1.f)
+                alpha = 1.f - (e.age - (fadeSec - 1.f));
+            if (alpha <= 0.f) { cy -= entryH; continue; }
+
+            auto Fade = [&](ImU32 col) -> ImU32 {
+                int a = (int)(((col >> 24) & 0xFF) * alpha);
+                return (col & 0x00FFFFFF) | ((ImU32)a << 24);
+            };
+
+            cy -= entryH;
+
+            // Semi-transparent pill per message
+            ImVec2 tl = {marginX - 4.f, cy};
+            ImVec2 br = {marginX + chatW, cy + entryH};
+            fdl->AddRectFilled(tl, br, Fade(IM_COL32(8, 8, 16, 160)), 4.f);
+
+            // Name (tinted accent blue)
+            std::string line = e.name + ": " + e.text;
+            // Name portion
+            float nameW = ImGui::CalcTextSize((e.name + ": ").c_str()).x;
+            fdl->AddText({marginX, cy + 2.f}, Fade(IM_COL32(120, 160, 255, 240)), (e.name + ": ").c_str());
+            fdl->AddText({marginX + nameW, cy + 2.f}, Fade(IM_COL32(220, 220, 240, 230)), e.text.c_str());
+        }
+    }
+
+    // Input bar (only visible when chat is open)
+    if (m_chatOpen) {
+        // Dim background for the input
+        fdl->AddRectFilled(
+            {marginX - 4.f,    inputY - 2.f},
+            {marginX + chatW,  inputY + inputH + 2.f},
+            IM_COL32(8, 8, 16, 200), 8.f);
+        fdl->AddRect(
+            {marginX - 4.f,    inputY - 2.f},
+            {marginX + chatW,  inputY + inputH + 2.f},
+            IM_COL32(50, 80, 200, 180), 8.f, 0, 1.f);
+
+        // Invisible window to host InputText
+        ImGui::SetNextWindowPos({marginX, inputY});
+        ImGui::SetNextWindowSize({chatW + 4.f, inputH});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,    {0.f, 0.f, 0.f, 0.f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,     {0.f, 0.f, 0.f, 0.f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, {0.f, 0.f, 0.f, 0.f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  {0.f, 0.f, 0.f, 0.f});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {0.f, 0.f});
+        ImGui::Begin("##chatinput", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+        ImGui::SetNextItemWidth(chatW);
+        ImGui::SetKeyboardFocusHere();
+        bool enter = ImGui::InputText("##chatmsg", m_chatBuf, sizeof(m_chatBuf),
+                                      ImGuiInputTextFlags_EnterReturnsTrue);
+        if (enter && m_chatBuf[0]) {
+            m_pendingChatSend = m_chatBuf;
+            m_chatBuf[0]      = '\0';
+            m_chatOpen        = false;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            m_chatBuf[0] = '\0';
+            m_chatOpen   = false;
+        }
+
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(4);
+    }
 }

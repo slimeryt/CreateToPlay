@@ -35,9 +35,12 @@ private:
     void CreateQuad();
     void RenderQuad();
 
+    void DrawSky(const Camera& camera);
+
     Mesh   m_cube;
     Shader m_phongShader;
     Shader m_shadowShader;
+    Shader m_skyShader;
     Shader m_bloomExtractShader;
     Shader m_blurShader;
     Shader m_compositeShader;

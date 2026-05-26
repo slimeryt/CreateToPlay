@@ -20,6 +20,7 @@ static constexpr float kFogDensity  = 0.006f;
 bool Renderer::Init() {
     if (!m_phongShader.LoadFromSource(       kPhongVert,  kPhongFrag))         return false;
     if (!m_shadowShader.LoadFromSource(      kShadowVert, kShadowFrag))        return false;
+    if (!m_skyShader.LoadFromSource(         kQuadVert,   kSkyFrag))           return false;
     if (!m_bloomExtractShader.LoadFromSource(kQuadVert,   kBloomExtractFrag))  return false;
     if (!m_blurShader.LoadFromSource(        kQuadVert,   kBlurFrag))          return false;
     if (!m_compositeShader.LoadFromSource(   kQuadVert,   kCompositeFrag))     return false;
@@ -41,6 +42,7 @@ bool Renderer::Init() {
 void Renderer::Shutdown() {
     m_phongShader.Shutdown();
     m_shadowShader.Shutdown();
+    m_skyShader.Shutdown();
     m_bloomExtractShader.Shutdown();
     m_blurShader.Shutdown();
     m_compositeShader.Shutdown();
@@ -186,14 +188,33 @@ void Renderer::BeginShadowPass() {
     m_shadowShader.SetMat4("uLightSpaceMatrix", m_lightSpaceMatrix);
 }
 
+void Renderer::DrawSky(const Camera& camera) {
+    glDepthMask(GL_FALSE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+
+    m_skyShader.Use();
+    m_skyShader.SetMat4("uInvProj", glm::inverse(camera.GetProjection()));
+    m_skyShader.SetMat4("uInvView", glm::inverse(camera.GetView()));
+    m_skyShader.SetVec3("uSunDir",  kLightDir);
+    RenderQuad();
+
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+}
+
 void Renderer::BeginMainPass(const Camera& camera) {
     m_inShadow = false;
     glCullFace(GL_BACK);
     glDisable(GL_POLYGON_OFFSET_FILL);
     glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
     glViewport(0, 0, m_width, m_height);
-    glClearColor(0.53f, 0.81f, 0.98f, 1.f);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.f);  // black — sky covers it
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // Draw procedural sky first (behind all geometry)
+    DrawSky(camera);
 
     m_phongShader.Use();
     m_phongShader.SetMat4("uView",             camera.GetView());

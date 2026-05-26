@@ -117,6 +117,16 @@ void NetClient::Disconnect() {
     printf("[Net] Disconnected\n");
 }
 
+// ── Chat send ─────────────────────────────────────────────────────────────────
+
+void NetClient::SendChat(const std::string& msg) {
+    if (m_sock == kInvalidSocket) return;
+    PktChat pkt;
+    strncpy(pkt.name, m_localName.c_str(), sizeof(pkt.name) - 1);
+    strncpy(pkt.msg,  msg.c_str(),         sizeof(pkt.msg)  - 1);
+    SendRaw(&pkt, sizeof(pkt));
+}
+
 // ── Per-frame update ──────────────────────────────────────────────────────────
 
 void NetClient::Update(const glm::vec3& localPos, float localYaw) {
@@ -206,5 +216,14 @@ void NetClient::ProcessPayload(const uint8_t* buf, int len) {
             std::strncpy(nameBuf, s.name, 20);
             r.name = nameBuf;
         }
+
+    } else if (type == PKT_CHAT && len >= (int)sizeof(PktChat)) {
+        const auto* pkt = reinterpret_cast<const PktChat*>(buf);
+        ChatMsg msg;
+        char nameBuf[21] = {}; strncpy(nameBuf, pkt->name, 20);
+        char msgBuf[81]  = {}; strncpy(msgBuf,  pkt->msg,  80);
+        msg.name = nameBuf;
+        msg.text = msgBuf;
+        m_pendingChats.push_back(std::move(msg));
     }
 }

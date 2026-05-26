@@ -3,6 +3,7 @@
 #include <imgui.h>
 #include <string>
 #include <vector>
+#include <deque>
 #include <set>
 #include <future>
 #include "auth/AuthClient.h"
@@ -69,6 +70,22 @@ public:
     struct NametagInfo { float x, y; std::string name; };
     void SetNametags(std::vector<NametagInfo> tags) { m_nametags = std::move(tags); }
 
+    // Toast notifications — push from anywhere (Engine, GUI, etc.)
+    void PushToast(const std::string& text, const std::string& sub = "",
+                   float life = 4.f, ImU32 iconColor = IM_COL32(100, 200, 255, 255));
+
+    // In-game chat
+    struct ChatEntry { std::string name, text; float age = 0.f; };
+    void AddChatMessage(const std::string& name, const std::string& text);
+    void SetChatOpen(bool open) { m_chatOpen = open; }
+    bool IsChatOpen()    const  { return m_chatOpen; }
+    // Returns pending chat text to send (cleared on read)
+    std::string GetAndClearPendingChatSend() {
+        std::string s = m_pendingChatSend;
+        m_pendingChatSend.clear();
+        return s;
+    }
+
     // Auth / user info
     bool               IsLoggedIn()    const { return m_loggedIn; }
     const std::string& GetUsername()   const { return m_username; }
@@ -92,6 +109,9 @@ private:
     void DrawSettingsPanel();       // app-level settings overlay
     void DrawProfilePage();         // standalone own-profile full-screen page
     void DrawFriendProfilePage();   // standalone friend-profile full-screen page
+    void DrawServerBrowser();       // full-screen server info panel
+    void DrawToasts();              // floating toast notifications (foreground draw list)
+    void DrawChat();                // in-game chat overlay
 
     // 3-D avatar preview (off-screen FBO rendered before ImGui flushes)
     void InitAvatarPreview();
@@ -142,6 +162,27 @@ private:
     // Cached friend profile (for DrawFriendProfilePage)
     std::string       m_profileViewingUser;   // username the cache is for
     UserProfileResult m_cachedFriendProfile;
+
+    // ── Server Browser ────────────────────────────────────────────────────────
+    bool               m_serverBrowserOpen    = false;
+    bool               m_serverStatusInFlight = false;
+    std::future<ServerStatusResult> m_serverStatusFuture;
+    ServerStatusResult m_cachedServerStatus;
+
+    // ── Toast notifications ───────────────────────────────────────────────────
+    struct Toast {
+        std::string text, sub;
+        float       age  = 0.f;
+        float       life = 4.f;
+        ImU32       iconColor = IM_COL32(100, 200, 255, 255);
+    };
+    std::deque<Toast> m_toasts;
+
+    // ── In-game chat ──────────────────────────────────────────────────────────
+    std::deque<ChatEntry> m_chatLog;
+    bool   m_chatOpen          = false;
+    char   m_chatBuf[80]       = {};
+    std::string m_pendingChatSend;
 
     float m_friendRefreshT     = 0.f;  // seconds until next auto-refresh
     int   m_prevFriendReqCount = 0;    // count from last poll, for toast detection

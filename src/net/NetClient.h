@@ -2,6 +2,7 @@
 #include "NetProtocol.h"
 #include <glm/glm.hpp>
 #include <array>
+#include <deque>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -57,6 +58,16 @@ public:
     // Call once per frame: sends local pos, drains incoming snapshots.
     void Update(const glm::vec3& localPos, float localYaw);
 
+    // Chat
+    void SendChat(const std::string& msg);
+
+    struct ChatMsg { std::string name, text; };
+    std::deque<ChatMsg> GetAndClearPendingChats() {
+        std::deque<ChatMsg> out;
+        out.swap(m_pendingChats);
+        return out;
+    }
+
     bool    IsConnected() const { return m_sock != kInvalidSocket; }
     uint8_t MyId()        const { return m_myId; }
 
@@ -82,4 +93,6 @@ private:
     glm::vec3   m_localSkin  = {0.976f, 0.820f, 0.173f};
     glm::vec3   m_localShirt = {0.059f, 0.420f, 0.690f};
     glm::vec3   m_localPants = {0.110f, 0.529f, 0.047f};
+
+    std::deque<ChatMsg> m_pendingChats;
 };

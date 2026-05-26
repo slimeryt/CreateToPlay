@@ -10,6 +10,7 @@
 #include "ui/CoreGui.h"
 #include "net/NetClient.h"
 #include <memory>
+#include <string>
 
 class Engine {
 public:
@@ -37,6 +38,10 @@ private:
 
     // Kinematic collision bodies for remote players (null = slot unused)
     btRigidBody* m_remoteBodies[NET_MAX_PLAYERS] = {};
+
+    // Track per-slot active state + name last frame for join/leave toast detection
+    bool        m_prevRemoteActive[NET_MAX_PLAYERS] = {};
+    std::string m_prevRemoteName[NET_MAX_PLAYERS];
 
     static constexpr float kFixedDt = 1.0f / 60.0f;
 };

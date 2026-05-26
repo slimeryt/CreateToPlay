@@ -526,6 +526,19 @@ static void HandleTextCommand(int slotIdx, const std::string& line) {
             TextSend(fd, "END");
         }
     }
+    // ── SERVER_STATUS ───────────────────────────────────────────────────────────
+    else if (strcmp(cmd, "SERVER_STATUS") == 0) {
+        int players = 0;
+        for (auto& cl : g_clients)
+            if (cl.active && cl.inGame && !cl.isTextConn) ++players;
+        TextSend(fd, "OK");
+        char row[64];
+        snprintf(row, sizeof(row), "players %d", players);
+        TextSend(fd, row);
+        snprintf(row, sizeof(row), "max %d", NET_MAX_PLAYERS);
+        TextSend(fd, row);
+        TextSend(fd, "END");
+    }
     else {
         TextSend(fd, "FAIL Unknown command");
     }
@@ -617,6 +630,20 @@ static void ProcessPayload(int i, const uint8_t* buf, int len) {
     if (buf[0] == PKT_POSITION && len >= (int)sizeof(PktPosition)) {
         const auto* p = reinterpret_cast<const PktPosition*>(buf);
         c.x = p->x; c.y = p->y; c.z = p->z; c.yaw = p->yaw;
+    }
+
+    // ── Chat: relay to all in-game clients ─────────────────────────────────────
+    if (buf[0] == PKT_CHAT && len >= (int)sizeof(PktChat)) {
+        PktChat pkt;
+        memcpy(&pkt, buf, sizeof(pkt));
+        // Enforce sender's server-known name
+        strncpy(pkt.name, c.name, sizeof(pkt.name) - 1);
+        // Null-terminate message
+        pkt.msg[sizeof(pkt.msg)-1] = '\0';
+        printf("[Chat] %s: %s\n", pkt.name, pkt.msg);
+        for (auto& o : g_clients)
+            if (o.active && o.inGame && !o.isTextConn)
+                o.SendRaw(&pkt, sizeof(pkt));
     }
 }
 

@@ -3,6 +3,7 @@
 #include "character/Character.h"
 #include <SDL.h>
 #include <glad/glad.h>
+#include <imgui.h>
 #include <btBulletDynamicsCommon.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -163,6 +164,46 @@ void Engine::Run() {
             // Send position + drain server packets every display frame
             m_netClient.Update(m_character.GetPosition(), m_character.GetFacingYaw());
 
+            // ── Chat: drain incoming messages from server ──────────────────────
+            {
+                auto msgs = m_netClient.GetAndClearPendingChats();
+                for (auto& msg : msgs)
+                    m_coreGui.AddChatMessage(msg.name, msg.text);
+            }
+
+            // ── Chat: send outgoing message ────────────────────────────────────
+            {
+                std::string pending = m_coreGui.GetAndClearPendingChatSend();
+                if (!pending.empty()) {
+                    // Echo locally so the sender sees their own message
+                    m_coreGui.AddChatMessage(m_coreGui.GetUsername(), pending);
+                    m_netClient.SendChat(pending);
+                }
+            }
+
+            // ── Join/leave toasts ──────────────────────────────────────────────
+            {
+                const auto& remotes = m_netClient.GetRemotePlayers();
+                for (int i = 0; i < NET_MAX_PLAYERS; ++i) {
+                    bool wasActive = m_prevRemoteActive[i];
+                    bool isActive  = remotes[i].active;
+                    if (isActive && !wasActive && !remotes[i].name.empty()) {
+                        m_prevRemoteName[i] = remotes[i].name;
+                        m_coreGui.PushToast(remotes[i].name + " joined",
+                                            "", 4.f, IM_COL32(60, 200, 100, 255));
+                    } else if (!isActive && wasActive) {
+                        std::string name = m_prevRemoteName[i].empty()
+                            ? "A player" : m_prevRemoteName[i];
+                        m_coreGui.PushToast(name + " left",
+                                            "", 3.f, IM_COL32(200, 100, 60, 255));
+                        m_prevRemoteName[i].clear();
+                    }
+                    if (isActive && !remotes[i].name.empty())
+                        m_prevRemoteName[i] = remotes[i].name;
+                    m_prevRemoteActive[i] = isActive;
+                }
+            }
+
             // Sync player names to CoreGui for the pause-menu player list
             {
                 std::vector<std::string> players;
@@ -200,17 +241,31 @@ void Engine::ProcessEvents() {
         return;
     }
 
-    if (m_input.IsKeyJustPressed(SDL_SCANCODE_ESCAPE) && !m_coreGui.IsMenuOpen())
-        m_coreGui.SetMenuOpen(true);
+    if (m_input.IsKeyJustPressed(SDL_SCANCODE_ESCAPE) && !m_coreGui.IsMenuOpen()) {
+        if (m_coreGui.IsChatOpen())
+            m_coreGui.SetChatOpen(false);  // Escape closes chat first
+        else
+            m_coreGui.SetMenuOpen(true);
+    }
+
+    // T key opens chat (when menu + chat are both closed)
+    if (m_input.IsKeyJustPressed(SDL_SCANCODE_T) &&
+        !m_coreGui.IsMenuOpen() && !m_coreGui.IsChatOpen())
+    {
+        m_coreGui.SetChatOpen(true);
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+    }
 
     // Shift lock toggle — must live here (once per display frame) so the fixed-
     // update accumulator can't fire it twice in one frame and cancel itself.
-    if (m_input.IsKeyJustPressed(SDL_SCANCODE_LSHIFT) && !m_coreGui.IsMenuOpen())
+    if (m_input.IsKeyJustPressed(SDL_SCANCODE_LSHIFT) &&
+        !m_coreGui.IsMenuOpen() && !m_coreGui.IsChatOpen())
         m_controller.ToggleShiftLock();
 
     bool menuOpen = m_coreGui.IsMenuOpen();
-    SDL_SetRelativeMouseMode(menuOpen ? SDL_FALSE : SDL_TRUE);
-    if (menuOpen) m_input.ClearMouseDelta();
+    bool chatOpen = m_coreGui.IsChatOpen();
+    SDL_SetRelativeMouseMode((menuOpen || chatOpen) ? SDL_FALSE : SDL_TRUE);
+    if (menuOpen || chatOpen) m_input.ClearMouseDelta();
 }
 
 void Engine::FixedUpdate(float dt) {

@@ -148,6 +148,47 @@ void main() {
 }
 )GLSL";
 
+// Sky shader — uses kQuadVert, renders behind all geometry
+static const char* kSkyFrag = R"GLSL(
+#version 330 core
+in  vec2 TexCoord;
+out vec4 FragColor;
+
+uniform mat4 uInvProj;
+uniform mat4 uInvView;
+uniform vec3 uSunDir;
+
+void main() {
+    // Reconstruct world-space view direction from UV
+    vec2  ndc     = TexCoord * 2.0 - 1.0;
+    vec4  rayClip = vec4(ndc, -1.0, 1.0);
+    vec4  rayEye  = uInvProj * rayClip;
+    rayEye        = vec4(rayEye.xy, -1.0, 0.0);
+    vec3  ray     = normalize((uInvView * rayEye).xyz);
+
+    // Sky gradient: ground → horizon → zenith
+    float t       = ray.y;
+    vec3  zenith  = vec3(0.10, 0.20, 0.50);
+    vec3  horizon = vec3(0.52, 0.72, 0.94);
+    vec3  ground  = vec3(0.32, 0.38, 0.32);
+
+    vec3 sky;
+    if (t >= 0.0)
+        sky = mix(horizon, zenith, pow(t, 0.6));
+    else
+        sky = mix(horizon, ground, min(-t * 5.0, 1.0));
+
+    // Sun halo + disc
+    float sunDot  = dot(ray, normalize(uSunDir));
+    float sunHalo = pow(max(sunDot, 0.0), 60.0) * 0.30;
+    float sunDisc = step(0.9997, sunDot);
+    sky += vec3(1.2, 1.0, 0.7) * sunHalo;
+    sky  = mix(sky, vec3(3.0, 2.8, 2.2), sunDisc);
+
+    FragColor = vec4(sky, 1.0);
+}
+)GLSL";
+
 static const char* kCompositeFrag = R"GLSL(
 #version 330 core
 in  vec2 TexCoord;

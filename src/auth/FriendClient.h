@@ -50,6 +50,13 @@ struct UserProfileResult {
     std::string error;
 };
 
+struct ServerStatusResult {
+    bool        ok          = false;
+    int         playerCount = 0;
+    int         maxPlayers  = 0;
+    std::string error;
+};
+
 // ── FriendClient ─────────────────────────────────────────────────────────────
 // All methods are synchronous / blocking — call from a background thread.
 // Text-line protocol over a short-lived TCP connection:
@@ -75,10 +82,11 @@ public:
                                     const std::string& user);
     JoinFriendResult  JoinFriend      (const std::string& host, uint16_t port,
                                      const std::string& user, const std::string& target);
-    UserProfileResult GetUserProfile (const std::string& host, uint16_t port,
-                                     const std::string& targetUser);
-    FriendOpResult    SetUserProfile (const std::string& host, uint16_t port,
-                                     const std::string& user,
-                                     const float skin[3], const float shirt[3],
-                                     const float pants[3], const std::string& bio);
+    UserProfileResult  GetUserProfile (const std::string& host, uint16_t port,
+                                      const std::string& targetUser);
+    FriendOpResult     SetUserProfile (const std::string& host, uint16_t port,
+                                      const std::string& user,
+                                      const float skin[3], const float shirt[3],
+                                      const float pants[3], const std::string& bio);
+    ServerStatusResult GetServerStatus(const std::string& host, uint16_t port);
 };

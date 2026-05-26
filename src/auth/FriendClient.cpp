@@ -276,6 +276,35 @@ UserProfileResult FriendClient::GetUserProfile(const std::string& host, uint16_t
     return res;
 }
 
+ServerStatusResult FriendClient::GetServerStatus(const std::string& host, uint16_t port) {
+    SockInit();
+    NativeSock s = FC_Connect(host, port);
+    if (s == kBad) { SockCleanup(); return {false, 0, 0, "Could not connect to server"}; }
+
+    if (!FC_SendLine(s, "SERVER_STATUS")) {
+        SockClose(s); SockCleanup(); return {false, 0, 0, "Send failed"};
+    }
+
+    std::string first;
+    if (!FC_RecvLine(s, first) || first != "OK") {
+        SockClose(s); SockCleanup();
+        return {false, 0, 0, first.empty() ? "No response" : first};
+    }
+
+    ServerStatusResult res;
+    res.ok = true;
+    std::string line;
+    while (FC_RecvLine(s, line) && line != "END") {
+        if (line.size() > 8 && line.compare(0, 8, "players ") == 0)
+            res.playerCount = atoi(line.c_str() + 8);
+        else if (line.size() > 4 && line.compare(0, 4, "max ") == 0)
+            res.maxPlayers = atoi(line.c_str() + 4);
+    }
+
+    SockClose(s); SockCleanup();
+    return res;
+}
+
 FriendOpResult FriendClient::SetUserProfile(const std::string& host, uint16_t port,
                                              const std::string& user,
                                              const float skin[3], const float shirt[3],
