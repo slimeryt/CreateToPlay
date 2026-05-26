@@ -480,6 +480,117 @@ void CoreGui::DrawMaintenanceScreen() {
     ImGui::PopStyleColor();
 }
 
+// ── In-game server kick overlay ───────────────────────────────────────────────
+
+void CoreGui::DrawKickOverlay() {
+    ImGuiIO& io = ImGui::GetIO();
+    const float W = io.DisplaySize.x;
+    const float H = io.DisplaySize.y;
+
+    // Full-screen dim (non-interactive)
+    ImGui::SetNextWindowPos({0.f, 0.f});
+    ImGui::SetNextWindowSize({W, H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.f, 0.f, 0.f, 0.72f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::Begin("##kickdim", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoMove   |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    // Centered card
+    const float cardW = 420.f;
+    const float cardH = 210.f;
+    const float kPad  = 28.f;
+    const float btnH  = 38.f;
+
+    ImGui::SetNextWindowPos({(W - cardW) * 0.5f, (H - cardH) * 0.5f});
+    ImGui::SetNextWindowSize({cardW, cardH});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.04f, 0.06f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Border,   ImVec4(0.11f, 0.11f, 0.18f, 1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,   12.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,  1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {kPad, kPad});
+
+    ImGui::Begin("##kickcard", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoSavedSettings);
+
+    ImDrawList* dl   = ImGui::GetWindowDrawList();
+    ImVec2      wpos = ImGui::GetWindowPos();
+    const float innerW = cardW - kPad * 2.f;
+
+    if (m_kickRetrying) {
+        // Infinite spinner — never resolves
+        const float spinR  = 22.f;
+        const float spinCX = wpos.x + cardW * 0.5f;
+        const float spinCY = wpos.y + cardH * 0.5f - 14.f;
+        float t = (float)ImGui::GetTime();
+        for (int i = 0; i < 24; ++i) {
+            float a0   = t * 3.f + 4.5f * (float)i     / 24;
+            float a1   = t * 3.f + 4.5f * (float)(i+1) / 24;
+            float fade = (float)i / 24;
+            dl->AddLine(
+                {spinCX + cosf(a0)*spinR, spinCY + sinf(a0)*spinR},
+                {spinCX + cosf(a1)*spinR, spinCY + sinf(a1)*spinR},
+                IM_COL32(28, 92, 240, (int)(55 + 200*fade)), 3.5f);
+        }
+        const char* txt = "Connecting...";
+        ImVec2 tsz = ImGui::CalcTextSize(txt);
+        dl->AddText({spinCX - tsz.x*0.5f, spinCY + spinR + 14.f},
+                    IM_COL32(140, 140, 165, 220), txt);
+    } else {
+        // Title
+        ImGui::PushFont(m_fontTitle);
+        const char* title = "Internal Server Error";
+        float tw = ImGui::CalcTextSize(title).x;
+        ImGui::SetCursorPosX((innerW - tw) * 0.5f);
+        ImGui::TextColored({1.f, 1.f, 1.f, 1.f}, "%s", title);
+        ImGui::PopFont();
+
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.f);
+
+        const char* sub = "Lost connection to the server.";
+        float sw = ImGui::CalcTextSize(sub).x;
+        ImGui::SetCursorPosX((innerW - sw) * 0.5f);
+        ImGui::TextColored({0.55f, 0.55f, 0.65f, 1.f}, "%s", sub);
+
+        // Buttons pinned to bottom of card
+        const float gap  = 10.f;
+        const float btnW = (innerW - gap) * 0.5f;
+        ImGui::SetCursorPosY(cardH - kPad - btnH);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
+
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.07f, 0.07f, 0.10f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.11f, 0.11f, 0.18f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.05f, 0.05f, 0.08f, 1.f});
+        if (ImGui::Button("Leave", {btnW, btnH})) {
+            m_wantsLeave        = true;
+            m_serverReachable   = false;  // show maintenance screen on return
+            m_serverCheckRetryT = 0.f;    // trigger re-check on home page immediately
+        }
+        ImGui::PopStyleColor(3);
+
+        ImGui::SameLine(0.f, gap);
+
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.11f, 0.36f, 0.94f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.22f, 0.48f, 1.00f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.07f, 0.26f, 0.80f, 1.f});
+        if (ImGui::Button("Retry", {btnW, btnH}))
+            m_kickRetrying = true;
+        ImGui::PopStyleColor(3);
+
+        ImGui::PopStyleVar(); // FrameRounding
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+}
+
 // ── 3-D avatar preview ────────────────────────────────────────────────────────
 
 static GLuint AvatarCompileShader(const char* vsrc, const char* fsrc) {
@@ -730,6 +841,14 @@ void CoreGui::BeginFrame() {
 }
 
 void CoreGui::Render() {
+    // Kick overlay — drawn over everything when connection drops mid-game
+    if (m_kickedInGame) {
+        DrawKickOverlay();
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        return;
+    }
+
     if (m_menuOpen) {
         DrawEscapeMenu();
 

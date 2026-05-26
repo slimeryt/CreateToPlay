@@ -86,6 +86,7 @@ void Engine::Run() {
         if (m_coreGui.WantsLeave()) {
             m_netClient.Disconnect();
             m_connectInFlight = false;
+            m_wasConnected    = false;
             m_coreGui.SetLoading(false);
             btRigidBody* body = m_character.GetBody();
             btTransform t; t.setIdentity();
@@ -184,6 +185,14 @@ void Engine::Run() {
             while (accum >= kFixedDt) {
                 FixedUpdate(kFixedDt);
                 accum -= kFixedDt;
+            }
+
+            // Detect mid-game connection drop → show kick overlay
+            {
+                bool isConnected = m_netClient.IsConnected();
+                if (m_wasConnected && !isConnected && !m_coreGui.IsKickedInGame())
+                    m_coreGui.SetKickedInGame(true);
+                m_wasConnected = isConnected;
             }
 
             // Send position + drain server packets every display frame

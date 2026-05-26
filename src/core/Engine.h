@@ -44,6 +44,9 @@ private:
     bool        m_prevRemoteActive[NET_MAX_PLAYERS] = {};
     std::string m_prevRemoteName[NET_MAX_PLAYERS];
 
+    // Track connection state to detect mid-game drops
+    bool        m_wasConnected = false;
+
     // Async connection during loading screen
     std::future<bool> m_connectFuture;
     bool              m_connectInFlight = false;

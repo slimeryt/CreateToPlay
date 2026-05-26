@@ -50,6 +50,8 @@ public:
         m_wantsJoin        = false;
         m_menuOpen         = false;
         m_leaveConfirmOpen = false;
+        m_kickedInGame     = false;
+        m_kickRetrying     = false;
     }
     bool WantsReset()    const { return m_wantsReset; }
     void ClearReset()          { m_wantsReset = false; }
@@ -125,6 +127,7 @@ private:
     void DrawFriendProfilePage();   // standalone friend-profile full-screen page
     void DrawServerBrowser();       // full-screen server info panel
     void DrawMaintenanceScreen();   // full-screen maintenance overlay (server down)
+    void DrawKickOverlay();         // in-game "Internal Server Error" card
     void DrawToasts();              // floating toast notifications (foreground draw list)
     void DrawChat();                // in-game chat overlay
 
@@ -236,6 +239,15 @@ private:
     // Server reachability (maintenance mode)
     void KickServerCheck();
     void PollServerCheck();
+
+    // In-game kick state
+    bool m_kickedInGame = false;
+    bool m_kickRetrying = false;
+
+public:
+    void SetKickedInGame(bool on) { m_kickedInGame = on; if (!on) m_kickRetrying = false; }
+    bool IsKickedInGame()   const { return m_kickedInGame; }
+private:
 
     int  m_sidebarTab          = 0;
     bool m_wantsLeave          = false;
