@@ -77,16 +77,48 @@ bool NetClient::Connect(const std::string& host, uint16_t port) {
         return false;
     }
 
-    if (connect(s, res->ai_addr, (int)res->ai_addrlen) != 0) {
-        printf("[Net] connect() failed to %s:%u\n", host.c_str(), port);
+    // Non-blocking connect with a 5-second timeout via select().
+    // This ensures the async thread always returns promptly even if the server
+    // is completely unreachable, instead of blocking for 30-75 s (OS default).
+    SockNonBlock(s);
+    int cr = connect(s, res->ai_addr, (int)res->ai_addrlen);
+    freeaddrinfo(res);
+
+    bool connected = false;
+#ifdef _WIN32
+    bool pending = (cr != 0 && WSAGetLastError() == WSAEWOULDBLOCK);
+#else
+    bool pending = (cr != 0 && errno == EINPROGRESS);
+#endif
+
+    if (cr == 0) {
+        connected = true;   // instant connect (loopback)
+    } else if (pending) {
+        // Wait up to 5 s for the connection to complete
+        fd_set wfds, efds;
+        FD_ZERO(&wfds); FD_SET(s, &wfds);
+        FD_ZERO(&efds); FD_SET(s, &efds);
+        timeval tv{5, 0};
+        if (select(0, nullptr, &wfds, &efds, &tv) > 0 && FD_ISSET(s, &wfds)) {
+            int err = 0;
+#ifdef _WIN32
+            int errlen = sizeof(err);
+            getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&err, &errlen);
+#else
+            socklen_t errlen = sizeof(err);
+            getsockopt(s, SOL_SOCKET, SO_ERROR, (void*)&err, &errlen);
+#endif
+            connected = (err == 0);
+        }
+    }
+
+    if (!connected) {
+        printf("[Net] connect() failed/timed out for %s:%u\n", host.c_str(), port);
         SockClose(s);
-        freeaddrinfo(res);
         SockCleanup();
         return false;
     }
-    freeaddrinfo(res);
 
-    SockNonBlock(s);
     m_sock = s;
 
     // Send JOIN with actual name + avatar colours
