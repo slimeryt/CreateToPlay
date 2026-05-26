@@ -108,7 +108,11 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
     }
 
     // Initial server reachability check — shows maintenance screen if server is down
+    // ── TESTING: to force maintenance screen, comment out KickServerCheck()
+    //            and uncomment the two lines below it.  Undo when done. ────────
     KickServerCheck();
+    // m_serverReachable   = false;   // force maintenance on
+    // m_serverCheckRetryT = 9999.f;  // prevent auto-recover during test
 }
 
 void CoreGui::SaveSession() {
