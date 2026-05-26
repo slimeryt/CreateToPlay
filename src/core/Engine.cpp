@@ -102,7 +102,7 @@ void Engine::Run() {
         if (m_coreGui.WantsJoin()) {
             m_coreGui.ClearWantsJoin();
             m_coreGui.SetLoading(true);
-            m_loadMinTimer = 2.0f;  // show loading screen for at least 2 seconds
+            m_loadMinTimer = 0.3f;  // brief minimum so screen doesn't flash
 
             // Resolve server address
             std::string serverAddr;
