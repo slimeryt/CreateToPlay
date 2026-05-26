@@ -110,9 +110,9 @@ void CoreGui::Init(SDL_Window* window, SDL_GLContext glContext) {
     // Initial server reachability check — shows maintenance screen if server is down
     // ── TESTING: to force maintenance screen, comment out KickServerCheck()
     //            and uncomment the two lines below it.  Undo when done. ────────
-    KickServerCheck();
-    // m_serverReachable   = false;   // force maintenance on
-    // m_serverCheckRetryT = 9999.f;  // prevent auto-recover during test
+    // KickServerCheck();
+    m_serverReachable   = false;   // force maintenance on
+    m_serverCheckRetryT = 9999.f;  // prevent auto-recover during test
 }
 
 void CoreGui::SaveSession() {
@@ -366,7 +366,7 @@ void CoreGui::DrawMaintenanceScreen() {
     // Opaque full-screen background — covers everything below
     ImGui::SetNextWindowPos({0.f, 0.f});
     ImGui::SetNextWindowSize({W, H});
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.08f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.09f, 0.11f, 1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {0.f, 0.f});
     ImGui::Begin("##maintenance", nullptr,
@@ -376,38 +376,75 @@ void CoreGui::DrawMaintenanceScreen() {
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    const float cardW = 480.f, cardH = 300.f;
+    // ── Angled rounded-square grid (same as Studio login screen) ─────────────
+    {
+        static constexpr float kPI = 3.14159265f;
+        const float angle = 10.f * kPI / 180.f;
+        const float cosA  = cosf(angle);
+        const float sinA  = sinf(angle);
+        const float sqSz  = 96.f;
+        const float gap   = 14.f;
+        const float step  = sqSz + gap;
+        const float rnd   = 14.f;
+        const float hw    = sqSz * 0.5f - rnd;
+
+        const float pcx = W * 0.5f;
+        const float pcy = H * 0.5f;
+
+        const float diag = sqrtf(W * W + H * H) * 0.5f + step * 2.f;
+        const int   ext  = (int)(diag / step) + 1;
+
+        const ImU32 sqCol = IM_COL32(28, 29, 34, 255);
+
+        struct ArcDef { float dx, dy, a0, a1; };
+        const ArcDef kArcs[4] = {
+            { -1.f, -1.f,  kPI,        kPI * 1.5f },
+            {  1.f, -1.f,  kPI * 1.5f, kPI * 2.f  },
+            {  1.f,  1.f,  0.f,        kPI * 0.5f },
+            { -1.f,  1.f,  kPI * 0.5f, kPI        },
+        };
+
+        const float bndR = sqSz * 0.7072f;
+
+        for (int row = -ext; row <= ext; row++) {
+            for (int col = -ext; col <= ext; col++) {
+                const float lx = col * step;
+                const float ly = row * step;
+                const float wx = lx * cosA - ly * sinA + pcx;
+                const float wy = lx * sinA + ly * cosA + pcy;
+
+                if (wx + bndR < 0.f || wx - bndR > W ||
+                    wy + bndR < 0.f || wy - bndR > H)
+                    continue;
+
+                dl->PathClear();
+                for (const auto& a : kArcs) {
+                    const float alx = a.dx * hw;
+                    const float aly = a.dy * hw;
+                    const float awx = alx * cosA - aly * sinA + wx;
+                    const float awy = alx * sinA + aly * cosA + wy;
+                    dl->PathArcTo({ awx, awy }, rnd,
+                                  a.a0 + angle, a.a1 + angle, 3);
+                }
+                dl->PathFillConvex(sqCol);
+            }
+        }
+    }
+
+    // ── Card ──────────────────────────────────────────────────────────────────
+    const float cardW = 480.f, cardH = 240.f;
     const float cx    = W * 0.5f;
     const float cy    = H * 0.5f;
     const float cardX = cx - cardW * 0.5f;
     const float cardY = cy - cardH * 0.5f;
 
-    // ── Card background ───────────────────────────────────────────────────────
     dl->AddRectFilled({cardX, cardY}, {cardX + cardW, cardY + cardH},
-        IM_COL32(10, 10, 16, 255), 16.f);
+        IM_COL32(10, 10, 16, 245), 16.f);
     dl->AddRect({cardX, cardY}, {cardX + cardW, cardY + cardH},
         IM_COL32(38, 38, 60, 200), 16.f, 0, 1.2f);
 
-    // ── Warning triangle icon ─────────────────────────────────────────────────
-    const float iconCX = cx;
-    const float iconCY = cardY + 74.f;
-    const float triR   = 30.f;
-    ImVec2 triTop = {iconCX,                   iconCY - triR};
-    ImVec2 triBL  = {iconCX - triR * 0.866f,  iconCY + triR * 0.5f};
-    ImVec2 triBR  = {iconCX + triR * 0.866f,  iconCY + triR * 0.5f};
-
-    dl->AddTriangleFilled(triTop, triBL, triBR, IM_COL32(240, 168, 28, 235));
-    dl->AddTriangle      (triTop, triBL, triBR, IM_COL32(255, 200, 80, 120), 1.5f);
-
-    // "!" exclamation mark inside triangle
-    dl->AddRectFilled(
-        {iconCX - 2.2f, iconCY - triR * 0.40f},
-        {iconCX + 2.2f, iconCY + triR * 0.05f},
-        IM_COL32(18, 12, 2, 255), 1.f);
-    dl->AddCircleFilled({iconCX, iconCY + triR * 0.24f}, 2.6f, IM_COL32(18, 12, 2, 255));
-
     // ── Title ─────────────────────────────────────────────────────────────────
-    const float titleY = cardY + 126.f;
+    const float titleY = cardY + 52.f;
     ImGui::PushFont(m_fontTitle);
     const char* titleStr = "Under Maintenance";
     ImVec2 tsz = ImGui::CalcTextSize(titleStr);
@@ -419,13 +456,13 @@ void CoreGui::DrawMaintenanceScreen() {
     // ── Subtitle ──────────────────────────────────────────────────────────────
     const char* sub = "We're making improvements. Check back soon.";
     ImVec2 ssz = ImGui::CalcTextSize(sub);
-    dl->AddText({cx - ssz.x * 0.5f, titleY + 44.f},
+    dl->AddText({cx - ssz.x * 0.5f, titleY + 46.f},
                 IM_COL32(128, 128, 152, 218), sub);
 
     // ── Retry button ──────────────────────────────────────────────────────────
     const float btnW = 130.f, btnH = 36.f;
     const float btnX = cx - btnW * 0.5f;
-    const float btnY = cardY + cardH - btnH - 22.f;
+    const float btnY = cardY + cardH - btnH - 24.f;
 
     ImGui::SetCursorScreenPos({btnX, btnY});
     ImGui::PushStyleColor(ImGuiCol_Button,        {0.11f, 0.36f, 0.94f, 1.f});
