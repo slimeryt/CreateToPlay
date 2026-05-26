@@ -29,12 +29,14 @@ bool CharacterController::IsGrounded() const {
 }
 
 void CharacterController::Update(float dt) {
-    // Gather input
+    // Gather input — suppressed when chat or other UI has keyboard focus
     float ix = 0.0f, iz = 0.0f;
-    if (m_input->IsKeyDown(SDL_SCANCODE_D)) ix += 1.0f;
-    if (m_input->IsKeyDown(SDL_SCANCODE_A)) ix -= 1.0f;
-    if (m_input->IsKeyDown(SDL_SCANCODE_W)) iz += 1.0f;
-    if (m_input->IsKeyDown(SDL_SCANCODE_S)) iz -= 1.0f;
+    if (m_inputEnabled) {
+        if (m_input->IsKeyDown(SDL_SCANCODE_D)) ix += 1.0f;
+        if (m_input->IsKeyDown(SDL_SCANCODE_A)) ix -= 1.0f;
+        if (m_input->IsKeyDown(SDL_SCANCODE_W)) iz += 1.0f;
+        if (m_input->IsKeyDown(SDL_SCANCODE_S)) iz -= 1.0f;
+    }
 
     // Normalize diagonal input
     float len = std::sqrt(ix * ix + iz * iz);
@@ -72,7 +74,7 @@ void CharacterController::Update(float dt) {
     }
 
     // Jump — holding space re-jumps as soon as the character lands
-    if (m_input->IsKeyDown(SDL_SCANCODE_SPACE) && IsGrounded()) {
+    if (m_inputEnabled && m_input->IsKeyDown(SDL_SCANCODE_SPACE) && IsGrounded()) {
         btVector3 vel = m_character->GetBody()->getLinearVelocity();
         m_character->GetBody()->setLinearVelocity(btVector3(vel.x(), kJumpSpeed, vel.z()));
     }

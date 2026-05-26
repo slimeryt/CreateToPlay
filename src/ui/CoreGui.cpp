@@ -3985,12 +3985,13 @@ void CoreGui::DrawChat() {
         // Invisible window to host InputText
         ImGui::SetNextWindowPos({marginX, inputY});
         ImGui::SetNextWindowSize({chatW + 4.f, inputH});
-        ImGui::PushStyleColor(ImGuiCol_WindowBg,    {0.f, 0.f, 0.f, 0.f});
-        ImGui::PushStyleColor(ImGuiCol_FrameBg,     {0.f, 0.f, 0.f, 0.f});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,       {0.f, 0.f, 0.f, 0.f});
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,        {0.f, 0.f, 0.f, 0.f});
         ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, {0.f, 0.f, 0.f, 0.f});
         ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  {0.f, 0.f, 0.f, 0.f});
+        ImGui::PushStyleColor(ImGuiCol_Text,           {0.92f, 0.92f, 1.f, 1.f});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {0.f, 0.f});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    {0.f, 4.f});
         ImGui::Begin("##chatinput", nullptr,
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoNav        | ImGuiWindowFlags_NoSavedSettings |
@@ -4012,6 +4013,6 @@ void CoreGui::DrawChat() {
 
         ImGui::End();
         ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(4);
+        ImGui::PopStyleColor(5);
     }
 }

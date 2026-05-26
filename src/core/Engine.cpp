@@ -295,6 +295,7 @@ void Engine::FixedUpdate(float dt) {
         m_coreGui.ClearReset();
     }
 
+    m_controller.SetInputEnabled(!m_coreGui.IsChatOpen());
     m_controller.Update(dt);
 
     // ── Local character animation ──────────────────────────────────────────────

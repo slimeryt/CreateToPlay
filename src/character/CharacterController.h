@@ -15,6 +15,9 @@ public:
     void ToggleShiftLock()        { m_shiftLock = !m_shiftLock; }
     bool IsShiftLocked() const    { return m_shiftLock; }
 
+    // Disable all movement input (e.g. while chat is open)
+    void SetInputEnabled(bool on) { m_inputEnabled = on; }
+
 private:
     bool IsGrounded() const;
 
@@ -29,4 +32,5 @@ private:
 
     float m_targetFacingYaw = 0.0f;
     bool  m_shiftLock       = false;
+    bool  m_inputEnabled    = true;
 };
